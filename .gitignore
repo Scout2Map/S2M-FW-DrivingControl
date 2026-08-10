@@ -1,0 +1,19 @@
+# Build output
+build/
+test/build/
+*.o
+*.d
+*.elf
+*.bin
+*.hex
+*.map
+
+# External dependency, fetched via the commands in README
+cmsis/
+cmsis_device_f1/
+CMSIS_5/
+
+# Editor
+.vscode/
+.idea/
+*.swp
