@@ -223,7 +223,9 @@ void drive_update(void)
 
     // Clamp the request to what the gearbox can actually deliver
     float v = clampf(s_v_cmd, -MAX_WHEEL_SPEED_MPS, MAX_WHEEL_SPEED_MPS);
-    float w = s_w_cmd;
+    // Rotating faster than this smears a LiDAR scan badly enough to hurt
+    // scan matching, so the ceiling is set below the mechanical limit
+    float w = clampf(s_w_cmd, -MAX_ANGULAR_RATE, MAX_ANGULAR_RATE);
 
     // Differential drive kinematics, half the track width per side
     float half_base = WHEEL_BASE_MM * 0.0005f;

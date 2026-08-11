@@ -135,6 +135,23 @@ int main(void)
     run_loops(50);
     check("in place rotation drives the wheels apart", g_duty[0] < 0 && g_duty[1] > 0);
 
+    // --- angular ceiling ---
+    memset(g_speed, 0, sizeof g_speed);
+    g_now = 0;
+    drive_init(&stub_io);
+    drive_reset_odom();
+    hold(0.0f, 5.0f);              // far beyond the LiDAR friendly rate
+    run_loops(120);                // 0.6s, short enough to avoid pi wrap
+    {
+        float ax, ay, ath;
+        drive_get_odom(&ax, &ay, &ath);
+        // Heading rate must stay under the configured ceiling
+        float rate = fabsf(ath) / 0.6f;
+        printf("   spin rate under a 5 rad/s request: %.3f rad/s\n", rate);
+        check("angular request is capped for scan quality",
+              rate < MAX_ANGULAR_RATE + 0.1f);
+    }
+
     // --- odometry ---
     memset(g_speed, 0, sizeof g_speed);
     g_now = 0;

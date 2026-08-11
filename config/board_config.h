@@ -124,14 +124,29 @@
 #define WHEEL_BASE_MM           240.0f  // track width, matches the URDF
 
 // Encoder resolution
-// Yellow wire emits 11 pulses per motor revolution
+// Yellow wire emits ENC_PPR pulses per MOTOR revolution
 // Quadrature counts both edges of both channels, hence x4
-// GEAR_RATIO is a placeholder for the 76RPM variant, MEASURE IT
+//
+// GEAR_RATIO 131 is taken from the JGB37-520 12V datasheet table, where
+// 76rpm no-load sits exactly in the 131:1 column. The table offers
+// 6.3 / 10 / 19 / 30 / 56 / 90 / 131 / 168 / 270 / 506 / 810 and has no
+// 150 entry at all, so any 150 figure is a guess rather than a spec.
+//
+// Getting this wrong scales every distance the robot reports. A 150
+// assumption against a real 131 makes the robot claim 87cm after
+// travelling 1m, which shows up as loop closure drift in SLAM.
+//
+// Still verify by measurement. Marketing ratios are often rounded and
+// the real gear train can land on values like 131.25.
 // Procedure: hand turn one wheel exactly 10 revolutions, read the raw
 // counter delta, divide by 10, write the result into COUNTS_PER_WHEEL_REV
-#define ENC_PPR                 11
-#define GEAR_RATIO              150     // TODO verify by measurement
-#define COUNTS_PER_WHEEL_REV    (ENC_PPR * 4 * GEAR_RATIO)
+//
+// ENC_PPR is the remaining unverified term. JGB37 units ship with both
+// 11 and 13 pulse encoders. Confirm against the product page before
+// trusting the derived value.
+#define ENC_PPR                 11      // TODO confirm, 13 also exists
+#define GEAR_RATIO              131     // datasheet, verify by measurement
+#define COUNTS_PER_WHEEL_REV    (ENC_PPR * 4 * GEAR_RATIO)   // 5764
 #define MM_PER_COUNT            (WHEEL_CIRCUM_MM / (float)COUNTS_PER_WHEEL_REV)
 
 // ---- Velocity PID ----
@@ -142,14 +157,38 @@
 #define PID_USE_D               0        // preprocessor cannot compare floats
 #define PID_KD                  0.0f
 #define PID_I_LIMIT             400.0f  // anti windup clamp, permille
-#define PID_FF                  3800.0f // feedforward, reuse the open loop curve
+// Feedforward slope, permille per m/s. Derived from the rated speed so
+// that full duty maps to MAX_WHEEL_SPEED_MPS. If this is set from the
+// no-load figure the loop commands a speed the drivetrain cannot reach
+// and the integrator sits saturated.
+//   1000 permille / 0.20 m/s = 5000
+//
+// Note: at exactly MAX_WHEEL_SPEED_MPS the feedforward alone asks for
+// full duty, so the PID has no headroom left to correct with. That is
+// acceptable because the ceiling is rarely commanded, but if tracking
+// matters at top speed, lower MAX_WHEEL_SPEED_MPS to around 0.18 to
+// leave the loop some authority.
+#define PID_FF                  5000.0f
 
-// 76rpm -> 1.267 rev/s -> 0.262 m/s with 66mm wheels
-#define MAX_WHEEL_SPEED_MPS     0.26f
+// 76rpm is the NO-LOAD figure. Rated speed under load is 58rpm, which
+// is what the robot actually sustains once it carries its own mass.
+//   58rpm -> 0.967 rev/s -> 0.200 m/s with 66mm wheels
+// Sizing the ceiling off the no-load number would let the controller
+// command a speed the drivetrain cannot reach, leaving the integrator
+// permanently saturated.
+#define MAX_WHEEL_SPEED_MPS     0.20f
+
+// Angular ceiling. Spinning in place at the wheel limit gives
+//   w = 2 * v / track = 2 * 0.20 / 0.24 = 1.67 rad/s, about 96 deg/s
+// A full RPLiDAR C1 revolution takes 100ms, so that rate smears one
+// scan by roughly 9.6 degrees and degrades scan matching. Cap the
+// commanded rate well below the mechanical limit while mapping.
+#define MAX_ANGULAR_RATE        0.80f   // rad/s, about 46 deg/s
+#define MAX_ANGULAR_RATE_MECH   1.67f   // rad/s, what the wheels allow
 
 // ---- Open loop fallback ----
 // Still used when ENCODER_AVAILABLE is 0 or an encoder fault is latched
-#define DUTY_PER_MPS            3800.0f
+#define DUTY_PER_MPS            5000.0f
 #define DUTY_PER_RADPS          400.0f
 #define HEADING_KP              300.0f   // proportional only, open loop hold
 
