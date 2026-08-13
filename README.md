@@ -18,16 +18,39 @@ HAL과 RTOS를 사용하지 않고 CMSIS 레지스터 레벨로 직접 구현한
 sudo apt install gcc-arm-none-eabi openocd
 ```
 
-CMSIS 헤더는 저장소에 포함하지 않는다. 최초 1회 아래와 같이 내려받는다.
+CMSIS 헤더는 용량과 라이선스 문제로 저장소에 포함하지 않는다.
+클론 직후 1회 아래 스크립트를 실행한다.
 
 ```
-git clone --depth 1 https://github.com/STMicroelectronics/cmsis_device_f1
-git clone --depth 1 https://github.com/ARM-software/CMSIS_5
-
-mkdir -p cmsis/Device/ST/STM32F1xx cmsis/Include
-cp -r cmsis_device_f1/Include cmsis/Device/ST/STM32F1xx/
-cp -r CMSIS_5/CMSIS/Core/Include/* cmsis/Include/
+./setup.sh
+make
 ```
+
+`setup.sh`는 ST의 디바이스 헤더와 ARM의 코어 헤더를 받아 `cmsis/`에
+배치한다. 이미 존재하면 아무 동작도 하지 않으므로 반복 실행해도 안전하다.
+
+`stm32f1xx.h: No such file or directory` 오류는 이 단계를 건너뛴 경우 발생한다.
+
+### HAL을 사용하지 않는 데 따른 제약
+
+본 프로젝트는 순수 CMSIS만 사용한다. CMSIS 디바이스 헤더는 레지스터
+필드의 **마스크만** 정의하며, `RCC_CFGR_PLLSRC_HSE`처럼 특정 값을 나타내는
+상수는 ST HAL에만 존재한다.
+
+따라서 클럭 설정 등에서 값이 필요한 경우 RM0008 기준의 비트 패턴을
+파일 상단에 명시적으로 정의하여 사용한다. HAL 예제 코드를 참고할 때
+이 차이에 주의한다.
+
+### 빌드 결과 확인
+
+정상 빌드 시 다음과 같은 크기가 출력된다.
+
+```
+   text	   data	    bss	    dec	    hex	filename
+  12056	      0	   1176	  13232	   33b0	build/scout2map_drive.elf
+```
+
+64KB 플래시 대비 약 18%, 20KB RAM 대비 약 6%를 사용한다.
 
 ## 빌드 및 업로드
 
@@ -50,10 +73,12 @@ scout2map-fw-drive/
 ├── app/
 │   ├── main.c            # 협조적 스케줄러
 │   ├── board_io.c/.h     # 제어 계층 <-> 드라이버 결선 어댑터
+│   ├── calib.c/.h        # 엔코더 캘리브레이션 모드
 ├── lib/
 │   ├── hal/              # MCU 주변장치
 │   │   ├── clock.c/.h
 │   │   ├── systick.c/.h
+│   │   ├── debug_uart.c/.h
 │   │   └── startup_stm32f103.c
 │   ├── drivers/          # 외부 부품
 │   │   ├── motor.c/.h    # BTS7960
@@ -248,6 +273,79 @@ SLAM 지도가 12.7% 압축되며, 복도 왕복 시 루프 클로저 불일치�
 5. 결과를 `COUNTS_PER_WHEEL_REV`에 직접 대입하거나, 역산하여 `GEAR_RATIO`를 수정한다.
 
 좌우를 각각 측정하여 값이 크게 다르면 배선 또는 감속비 불일치를 의심한다.
+
+## 엔코더 캘리브레이션 모드
+
+`config/board_config.h`의 `CALIB_MODE`를 1로 설정하고 빌드하면
+주행 대신 캘리브레이션 모드로 부팅한다. 이 모드에서 모터는 활성화되지
+않으며, 양측 BTS7960의 EN 핀은 세션 내내 Low를 유지한다.
+
+```
+#define CALIB_MODE              1
+```
+
+### 디버그 출력 배선
+
+| STM32 | 대상 |
+|---|---|
+| PA2 (USART2 TX) | USB-TTL 어댑터의 RX |
+| GND | USB-TTL 어댑터의 GND |
+
+115200 8N1, 송신 전용이다. USART1을 사용하지 않는 이유는 TX가 PA9로
+좌측 엔코더 B상과 충돌하고, USART3은 PB10/PB11로 IMU와 충돌하기 때문이다.
+PA2는 현재 핀맵에서 유일하게 충돌이 없는 선택지다.
+
+```
+screen /dev/ttyUSB0 115200
+# 또는
+minicom -D /dev/ttyUSB0 -b 115200
+```
+
+### 측정 절차
+
+1. 차체를 들어 양쪽 바퀴가 자유롭게 회전하도록 한다.
+2. 한쪽 바퀴에 시작점을 표시한다.
+3. 표시한 바퀴를 **천천히 정확히 10회전** 정방향으로 돌린다.
+4. LED 점등 시점과 터미널 출력을 확인한다.
+
+### 판정 기준
+
+터미널 출력은 다음과 같은 형태다.
+
+```
+L    57640 (11PPR 10.000rev  13PPR 8.461rev)   R        0 (11PPR 0.000rev  13PPR 0.000rev)
+```
+
+10회전을 마친 시점의 `rev` 값이 10.000에 가까운 쪽이 실제 PPR이다.
+
+| 10회전 시점 관측 | 결론 | `COUNTS_PER_WHEEL_REV` |
+|---|---|---|
+| 11PPR 열이 10.000 부근 | ENC_PPR = 11 | 5764 |
+| 13PPR 열이 10.000 부근 | ENC_PPR = 13 | 6812 |
+| 어느 쪽도 아님 | 감속비 자체가 131이 아님 | 실측값 직접 대입 |
+
+USB-TTL 어댑터가 없는 경우 LED만으로도 판정할 수 있다.
+LED는 좌측 엔코더가 57640 카운트(11 PPR 가정 시 10회전)를 넘는 순간 점등한다.
+
+- 정확히 10회전 지점에서 점등 → **11 PPR**
+- 약 8.5회전 지점에서 점등 → **13 PPR**
+
+### 방향 확인
+
+정방향 회전 시 카운트가 **증가**해야 한다. 감소하는 축이 있으면
+`config/board_config.h`의 `ENC_L_INVERT` 또는 `ENC_R_INVERT`를 반전시킨다.
+
+### 좌우 대조
+
+양쪽을 각각 측정하여 값이 크게 다르면 감속비가 다른 모터가 섞였거나
+배선이 잘못된 것이다. 이 단계에서 반드시 확인한다.
+
+### 측정 후
+
+실측값을 `COUNTS_PER_WHEEL_REV`에 직접 대입하고 `CALIB_MODE`를 0으로
+되돌린 뒤 재빌드한다. `GEAR_RATIO`를 역산할 필요는 없다.
+
+**바닥에 내려놓기 전에 `CALIB_MODE`가 0인지 반드시 확인한다.**
 
 ## 제어 구조
 

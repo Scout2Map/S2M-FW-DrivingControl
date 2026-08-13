@@ -30,6 +30,11 @@
 // ============================================================
 
 // ---- Feature switches ----
+// Bench calibration build. Motors stay disabled and the firmware only
+// reports encoder counts over USART2 and the LED. Set back to 0 before
+// putting the robot on the floor.
+#define CALIB_MODE              1
+
 // Encoder motors installed, closed loop velocity control active
 #define ENCODER_AVAILABLE       1
 

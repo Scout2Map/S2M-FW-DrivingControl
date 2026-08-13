@@ -23,6 +23,7 @@
 #include "motor.h"
 #include "encoder.h"
 #include "drive.h"
+#include "calib.h"
 
 // ============================================================
 // Cooperative scheduler, no RTOS
@@ -63,6 +64,12 @@ int main(void)
 #if ENCODER_AVAILABLE
     encoder_init();
 #endif
+#if CALIB_MODE
+    // Bench mode. Motors are left disabled and this never returns.
+    iwdg_init();
+    calib_run();
+#endif
+
     drive_init(board_io_get());
 
     // Let the drivers and the UBEC rail settle
