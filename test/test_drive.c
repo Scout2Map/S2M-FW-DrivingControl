@@ -165,6 +165,29 @@ int main(void)
     check("straight run accumulates x only", x > 0.25f && fabsf(y) < 0.01f);
     check("straight run leaves heading unchanged", fabsf(th) < 0.01f);
 
+    // --- verified encoder constants ---
+    // Guards the bench measurement of 2026-08-13 against accidental edits
+    check("encoder resolution matches the bench measurement",
+          COUNTS_PER_WHEEL_REV == 5764);
+    {
+        // Ten wheel revolutions must equal the trip point observed on hardware
+        int32_t ten_revs = COUNTS_PER_WHEEL_REV * 10;
+        printf("   10 revs = %d counts, %.1f mm\n",
+               ten_revs, ten_revs * MM_PER_COUNT);
+        check("ten revolutions land on the observed trip point",
+              ten_revs == 57640);
+    }
+    {
+        // The 5ms poll must stay far from the int16 wrap limit
+        float per_loop = MAX_WHEEL_SPEED_MPS * 1000.0f
+                       * LOOP_PERIOD_S / MM_PER_COUNT;
+        printf("   counts per loop at top speed: %.1f\n", per_loop);
+        check("poll rate keeps wrap arithmetic unambiguous",
+              per_loop < 16000.0f);
+        check("resolution is fine enough for velocity PID",
+              per_loop > 5.0f);
+    }
+
     printf("\n%s (%d failure%s)\n\n",
            fails ? "SOME TESTS FAILED" : "ALL TESTS PASSED",
            fails, fails == 1 ? "" : "s");

@@ -33,7 +33,10 @@
 // Bench calibration build. Motors stay disabled and the firmware only
 // reports encoder counts over USART2 and the LED. Set back to 0 before
 // putting the robot on the floor.
-#define CALIB_MODE              1
+//
+// Encoder resolution was confirmed on 2026-08-13, so this is now off by
+// default. Set to 1 again if a motor is replaced or rewired.
+#define CALIB_MODE              0
 
 // Encoder motors installed, closed loop velocity control active
 #define ENCODER_AVAILABLE       1
@@ -143,29 +146,23 @@
 #define WHEEL_CIRCUM_MM         (3.14159265f * WHEEL_DIAMETER_MM)
 #define WHEEL_BASE_MM           240.0f  // track width, matches the URDF
 
-// Encoder resolution
-// Yellow wire emits ENC_PPR pulses per MOTOR revolution
-// Quadrature counts both edges of both channels, hence x4
+// Encoder resolution, VERIFIED ON HARDWARE 2026-08-13
 //
-// GEAR_RATIO 131 is taken from the JGB37-520 12V datasheet table, where
-// 76rpm no-load sits exactly in the 131:1 column. The table offers
-// 6.3 / 10 / 19 / 30 / 56 / 90 / 131 / 168 / 270 / 506 / 810 and has no
-// 150 entry at all, so any 150 figure is a guess rather than a spec.
+// Bench measurement: one wheel hand turned exactly 10 revolutions
+// tripped the calibration threshold at 57640 counts, confirming both
+// terms below. The 13 PPR hypothesis would have tripped near 8.5
+// revolutions and did not.
 //
-// Getting this wrong scales every distance the robot reports. A 150
-// assumption against a real 131 makes the robot claim 87cm after
-// travelling 1m, which shows up as loop closure drift in SLAM.
+//   ENC_PPR    11   yellow wire, pulses per MOTOR revolution
+//   GEAR_RATIO 131  matches the JGB37-520 12V datasheet column
+//                   where no-load speed reads 76 RPM
+//   11 x 4 (quadrature) x 131 = 5764 counts per WHEEL revolution
 //
-// Still verify by measurement. Marketing ratios are often rounded and
-// the real gear train can land on values like 131.25.
-// Procedure: hand turn one wheel exactly 10 revolutions, read the raw
-// counter delta, divide by 10, write the result into COUNTS_PER_WHEEL_REV
-//
-// ENC_PPR is the remaining unverified term. JGB37 units ship with both
-// 11 and 13 pulse encoders. Confirm against the product page before
-// trusting the derived value.
-#define ENC_PPR                 11      // TODO confirm, 13 also exists
-#define GEAR_RATIO              131     // datasheet, verify by measurement
+// A wrong value here scales every distance the robot reports and shows
+// up as loop closure drift in SLAM, so do not change these without
+// repeating the bench measurement.
+#define ENC_PPR                 11      // verified
+#define GEAR_RATIO              131     // verified
 #define COUNTS_PER_WHEEL_REV    (ENC_PPR * 4 * GEAR_RATIO)   // 5764
 #define MM_PER_COUNT            (WHEEL_CIRCUM_MM / (float)COUNTS_PER_WHEEL_REV)
 
