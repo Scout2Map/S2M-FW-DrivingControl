@@ -75,12 +75,24 @@ void led_set(uint8_t on)
 
 // Blocking blink used during bring-up and fault reporting.
 // Runs off a spin loop so it works before SysTick is configured.
+//
+// The watchdog is refreshed inside the delay. A three blink sequence
+// takes roughly 900ms, well past the 400ms IWDG timeout, so without
+// this the board resets mid-blink and appears to flicker forever.
+// Writing the key register is harmless when the IWDG is not running.
+static void blink_delay(void)
+{
+    for (volatile uint32_t d = 0; d < 300000U; d++) {
+        IWDG->KR = IWDG_REFRESH_KEY;
+    }
+}
+
 void led_blink_blocking(uint8_t times)
 {
     for (uint8_t i = 0; i < times; i++) {
         led_on();
-        for (volatile uint32_t d = 0; d < 300000U; d++) { }
+        blink_delay();
         led_off();
-        for (volatile uint32_t d = 0; d < 300000U; d++) { }
+        blink_delay();
     }
 }

@@ -13,8 +13,9 @@
  *
  * Note: flash needs two wait states above 48MHz, set before the switch.
  * If the crystal or the PLL fails to lock, clock_fault_handler() traps
- * with the LED on. Motors are not initialised at that point, so a halt
- * is safe here in a way it would not be later.
+ * and reports which stage failed through the LED blink count. Motors are
+ * not initialised at that point, so halting is safe here in a way it
+ * would not be later.
  */
 
 #include "stm32f1xx.h"
@@ -44,6 +45,12 @@
 #define ACR_LATENCY_2       (2U << 0)
 #define MAPR_SWJ_JTAGDISABLE (2U << 24) // SWD kept, JTAG pins released
 
+// Startup budgets. Generous on purpose, a clone crystal can take tens
+// of milliseconds to stabilise and a premature give up looks exactly
+// like a dead crystal.
+#define HSE_START_TIMEOUT   0x1000000U
+#define PLL_LOCK_TIMEOUT    0x0100000U
+
 void clock_init(void)
 {
     // Flash needs two wait states above 48MHz
@@ -52,13 +59,19 @@ void clock_init(void)
     // The prefetch buffer hides most of the wait state cost
     FLASH->ACR |= FLASH_ACR_PRFTBE;
 
-    // Start the external crystal
+    // Crystal mode rather than an external clock input. The reset value
+    // is already 0, but being explicit rules out a stale bit surviving
+    // a soft reset.
+    RCC->CR &= ~RCC_CR_HSEBYP;
     RCC->CR |= RCC_CR_HSEON;
+
     uint32_t guard = 0;
     while (!(RCC->CR & RCC_CR_HSERDY)) {
-        // Without the crystal we stay on HSI and USB cannot work
-        if (++guard > 0x10000U) {
-            clock_fault_handler();
+        // Clone boards sometimes carry a slow starting crystal, so this
+        // budget is deliberately generous. Giving up early looks exactly
+        // like a dead crystal and sends debugging down the wrong path.
+        if (++guard > HSE_START_TIMEOUT) {
+            clock_fault_handler(CLOCK_FAULT_HSE);
         }
     }
 
@@ -73,6 +86,8 @@ void clock_init(void)
     RCC->CFGR |= CFGR_ADCPRE_DIV6;
 
     // PLL source HSE, no prediv, multiply by 9
+    // PLLSRC and PLLMULL may only be written while the PLL is off
+    RCC->CR &= ~RCC_CR_PLLON;
     RCC->CFGR &= ~(RCC_CFGR_PLLSRC | RCC_CFGR_PLLXTPRE | RCC_CFGR_PLLMULL);
     RCC->CFGR |= CFGR_PLLSRC_HSE;
     RCC->CFGR |= CFGR_PLLMULL_9;
@@ -84,8 +99,8 @@ void clock_init(void)
     RCC->CR |= RCC_CR_PLLON;
     guard = 0;
     while (!(RCC->CR & RCC_CR_PLLRDY)) {
-        if (++guard > 0x10000U) {
-            clock_fault_handler();
+        if (++guard > PLL_LOCK_TIMEOUT) {
+            clock_fault_handler(CLOCK_FAULT_PLL);
         }
     }
 
@@ -114,15 +129,25 @@ void clock_init(void)
     AFIO->MAPR |= MAPR_SWJ_JTAGDISABLE;
 }
 
-// Called when the crystal or PLL fails to lock.
-// Motors are not initialised at this point, so halting here is safe in
+// Reports a clock failure through the LED and never returns.
+// Motors are not initialised at this point, so halting is safe here in
 // a way it would not be once the drivers are live.
-void clock_fault_handler(void)
+//
+// The blink count identifies which stage failed, which matters because
+// a dead crystal and a bad PLL configuration need different fixes:
+//   2 blinks -> HSE never became ready, suspect the crystal or its caps
+//   4 blinks -> PLL never locked, suspect the multiplier or source bits
+void clock_fault_handler(clock_fault_t reason)
 {
-    // The LED module owns the port mapping, no hardcoded pin here
     led_init();
+
+    uint8_t count = (reason == CLOCK_FAULT_HSE) ? 2U : 4U;
+
     while (1) {
-        // Fast blink distinguishes a clock fault from a normal halt
-        led_blink_blocking(1);
+        led_blink_blocking(count);
+        // Long gap so the group boundary is obvious to the eye
+        for (volatile uint32_t d = 0; d < 1500000U; d++) {
+            IWDG->KR = IWDG_REFRESH_KEY;
+        }
     }
 }

@@ -61,6 +61,17 @@
 #define ADC_PERIOD_MS           40U     // GP2D120 refreshes about every 38ms
 #define TELEM_PERIOD_MS         20U     // 50Hz telemetry to RPi5
 
+// ---- Watchdog ----
+// IWDG runs on the 40kHz LSI. Prescaler 32 with reload 500 lands near
+// 400ms. Any blocking routine longer than this must refresh the key
+// register itself or the board resets mid-operation.
+#define IWDG_PRESCALER          3U
+#define IWDG_RELOAD             500U
+#define IWDG_TIMEOUT_MS         400U
+#define IWDG_REFRESH_KEY        0xAAAAU
+#define IWDG_UNLOCK_KEY         0x5555U
+#define IWDG_START_KEY          0xCCCCU
+
 // ---- Safety limits ----
 #define CMD_TIMEOUT_MS          300U    // no command from RPi5 -> stop
 #define DUTY_SLEW_PER_LOOP      20      // max duty change per 5ms loop, permille

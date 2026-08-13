@@ -83,6 +83,8 @@ void Reset_Handler(void)
 
 void Default_Handler(void)
 {
-    // Watchdog will reset the board from here
+    // Deliberately does not refresh the watchdog. An unexpected vector
+    // means the firmware is in an undefined state, so letting the IWDG
+    // reset the board is the correct response rather than spinning here.
     while (1) { }
 }

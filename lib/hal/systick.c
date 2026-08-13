@@ -43,10 +43,14 @@ uint32_t systick_millis(void)
     return s_millis;
 }
 
+// Blocking delay. Refreshes the watchdog so callers do not have to
+// reason about whether their delay outlasts IWDG_TIMEOUT_MS.
+// Writing the key register is harmless when the IWDG is not running.
 void systick_delay_ms(uint32_t ms)
 {
     uint32_t start = s_millis;
     while ((s_millis - start) < ms) {
+        IWDG->KR = IWDG_REFRESH_KEY;
         __WFI();
     }
 }

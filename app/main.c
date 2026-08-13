@@ -33,13 +33,14 @@
 
 static void iwdg_init(void)
 {
-    // Independent watchdog on the 40kHz LSI
-    // Prescaler 32 with reload 500 lands near 400ms
-    IWDG->KR  = 0x5555U;
-    IWDG->PR  = 3U;
-    IWDG->RLR = 500U;
-    IWDG->KR  = 0xAAAAU;
-    IWDG->KR  = 0xCCCCU;
+    // Independent watchdog on the 40kHz LSI, see board_config.h
+    // Any blocking routine longer than IWDG_TIMEOUT_MS must refresh
+    // the key register itself
+    IWDG->KR  = IWDG_UNLOCK_KEY;
+    IWDG->PR  = IWDG_PRESCALER;
+    IWDG->RLR = IWDG_RELOAD;
+    IWDG->KR  = IWDG_REFRESH_KEY;
+    IWDG->KR  = IWDG_START_KEY;
 }
 
 int main(void)
@@ -105,6 +106,6 @@ int main(void)
         }
 
         // Refresh the watchdog only from the healthy path
-        IWDG->KR = 0xAAAAU;
+        IWDG->KR = IWDG_REFRESH_KEY;
     }
 }

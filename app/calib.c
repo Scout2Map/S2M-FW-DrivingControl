@@ -119,6 +119,6 @@ void calib_run(void)
             }
         }
 
-        IWDG->KR = 0xAAAAU;
+        IWDG->KR = IWDG_REFRESH_KEY;
     }
 }
