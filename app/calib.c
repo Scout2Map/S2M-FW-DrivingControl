@@ -25,6 +25,7 @@
 #include "calib.h"
 #include "debug_uart.h"
 #include "encoder.h"
+#include "led.h"
 #include "systick.h"
 
 // Candidate resolutions, the whole point of the exercise
@@ -33,9 +34,6 @@
 
 #define CALIB_REVS  10
 #define LED_TRIGGER (CPR_11PPR * CALIB_REVS)
-
-static void led_off(void) { GPIOC->BSRR = (1U << LED_PIN); }
-static void led_on(void)  { GPIOC->BSRR = (1U << (LED_PIN + 16U)); }
 
 static void print_banner(void)
 {
@@ -72,6 +70,10 @@ void calib_run(void)
     debug_uart_init();
     encoder_init();
     encoder_reset();
+
+    // Three blinks mark calibration mode, distinct from the two blinks
+    // main emits on boot, so the active mode is visible without a terminal
+    led_blink_blocking(3);
     led_off();
 
     print_banner();

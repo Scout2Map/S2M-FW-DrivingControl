@@ -20,6 +20,7 @@
 #include "stm32f1xx.h"
 #include "board_config.h"
 #include "clock.h"
+#include "led.h"
 
 // ============================================================
 // Clock setup for STM32F103C8T6
@@ -113,16 +114,15 @@ void clock_init(void)
     AFIO->MAPR |= MAPR_SWJ_JTAGDISABLE;
 }
 
-// Called when the crystal or PLL fails to lock
-// Motors are not running yet at this point so a halt is safe
+// Called when the crystal or PLL fails to lock.
+// Motors are not initialised at this point, so halting here is safe in
+// a way it would not be once the drivers are live.
 void clock_fault_handler(void)
 {
-    // Drive the onboard LED on and stop
-    RCC->APB2ENR |= RCC_APB2ENR_IOPCEN;
-    GPIOC->CRH &= ~(0xFU << 20);
-    GPIOC->CRH |= (0x2U << 20);   // output push pull 2MHz
-    GPIOC->BSRR = (1U << (LED_PIN + 16));  // active low, LED on
+    // The LED module owns the port mapping, no hardcoded pin here
+    led_init();
     while (1) {
-        __NOP();
+        // Fast blink distinguishes a clock fault from a normal halt
+        led_blink_blocking(1);
     }
 }

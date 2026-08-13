@@ -113,8 +113,12 @@
 #define BNO055_ADDR             0x28U   // 0x29 if the COM3 pin is pulled high
 
 // ---- Status LED ----
-#define LED_PORT                GPIOC
-#define LED_PIN                 13U     // onboard LED, active low
+// This core board is NOT a stock Blue Pill. Its schematic wires the
+// user LED D2 through R6 to PB12; a standard Blue Pill would use PC13.
+// Verify against the schematic before assuming either on a new board.
+#define LED_PORT                GPIOB
+#define LED_PIN                 12U
+#define LED_ACTIVE_LOW          1       // cathode side driven by the pin
 
 // ---- USB ----
 // PA11 = DM, PA12 = DP, driven by the USB peripheral

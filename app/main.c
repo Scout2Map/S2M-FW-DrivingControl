@@ -22,6 +22,7 @@
 #include "systick.h"
 #include "motor.h"
 #include "encoder.h"
+#include "led.h"
 #include "drive.h"
 #include "calib.h"
 
@@ -29,19 +30,6 @@
 // Cooperative scheduler, no RTOS
 // Each task compares its own deadline against the 1ms tick
 // ============================================================
-
-static void led_init(void)
-{
-    // PC13 onboard LED, active low
-    GPIOC->CRH &= ~(0xFU << ((LED_PIN - 8U) * 4U));
-    GPIOC->CRH |=  (0x2U << ((LED_PIN - 8U) * 4U));
-    GPIOC->BSRR = (1U << LED_PIN);   // start off
-}
-
-static void led_toggle(void)
-{
-    GPIOC->ODR ^= (1U << LED_PIN);
-}
 
 static void iwdg_init(void)
 {
@@ -60,6 +48,9 @@ int main(void)
     clock_init();
     systick_init();
     led_init();
+    // Two blinks on entry answer the first bring-up question, namely
+    // whether the firmware reached main at all
+    led_blink_blocking(2);
     motor_init();
 #if ENCODER_AVAILABLE
     encoder_init();
