@@ -44,7 +44,17 @@
 // The packet memory sits at USB_PMAADDR and is seen by the CPU as
 // 16 bit values spaced 4 bytes apart.
 #define PMA_BASE        (USB_PMAADDR)
-#define PMA(offset)     (*(volatile uint16_t *)(PMA_BASE + ((offset) * 2U)))
+
+// Takes a PMA byte offset and yields the halfword cell holding it.
+// PMA is 512 bytes of packet memory that the CPU sees as 16 bit values
+// on a 32 bit stride, so byte offset N sits at PMA_BASE + N*2.
+//
+// The argument is always a PMA byte offset. Never pre-divide it: an
+// earlier revision passed offset/2 here and every buffer landed at half
+// its intended address, so EP0 TX data was written straight over the
+// EP0 RX buffer and enumeration failed with a descriptor request error.
+#define PMA(byte_offset) \
+    (*(volatile uint16_t *)(PMA_BASE + ((byte_offset) * 2U)))
 
 #define BTABLE_ADDR     0x000U
 #define EP0_RX_ADDR     0x040U
@@ -55,11 +65,25 @@
 
 #define EP_MAX_PACKET   64U
 
-// Buffer descriptor table entries, indices into the PMA word space
-#define BDT_ADDR_TX(ep) PMA(BTABLE_ADDR / 2U + (ep) * 8U + 0U)
-#define BDT_COUNT_TX(ep) PMA(BTABLE_ADDR / 2U + (ep) * 8U + 2U)
-#define BDT_ADDR_RX(ep) PMA(BTABLE_ADDR / 2U + (ep) * 8U + 4U)
-#define BDT_COUNT_RX(ep) PMA(BTABLE_ADDR / 2U + (ep) * 8U + 6U)
+// COUNT_RX encodes the buffer size, not the received length, in a
+// packed form: bit 15 selects the block granularity, bits 14:10 hold
+// the block count. For 64 bytes that is BL_SIZE=1 (32 byte blocks)
+// with NUM_BLOCK=2. Writing NUM_BLOCK=1 yields a 32 byte buffer and
+// every full size packet overruns it.
+#define COUNT_RX_64     ((1U << 15) | (2U << 10))
+
+// EP_TYPE occupies bits 10:9 of the endpoint register
+#define EP_TYPE_BULK        (0U << 9)
+#define EP_TYPE_CONTROL     (1U << 9)
+#define EP_TYPE_ISO         (2U << 9)
+#define EP_TYPE_INTERRUPT   (3U << 9)
+
+// Buffer descriptor table. Each endpoint owns 8 PMA bytes holding four
+// halfwords: ADDR_TX, COUNT_TX, ADDR_RX, COUNT_RX.
+#define BDT_ADDR_TX(ep)  PMA(BTABLE_ADDR + (ep) * 8U + 0U)
+#define BDT_COUNT_TX(ep) PMA(BTABLE_ADDR + (ep) * 8U + 2U)
+#define BDT_ADDR_RX(ep)  PMA(BTABLE_ADDR + (ep) * 8U + 4U)
+#define BDT_COUNT_RX(ep) PMA(BTABLE_ADDR + (ep) * 8U + 6U)
 
 // Endpoint register bits that must be preserved rather than rewritten
 #define EP_NONTOGGLE    (USB_EP0R_CTR_RX | USB_EP0R_CTR_TX | \
@@ -182,7 +206,8 @@ static void ep_clear_ctr_tx(uint8_t ep)
 // byte is written as a halfword with a zero upper half.
 static void pma_write(uint16_t pma_offset, const uint8_t *src, uint16_t len)
 {
-    volatile uint16_t *dst = &PMA(pma_offset / 2U);
+    // Each successive halfword sits two cells apart in CPU address space
+    volatile uint16_t *dst = &PMA(pma_offset);
     for (uint16_t i = 0; i < len / 2U; i++) {
         dst[i * 2U] = (uint16_t)(src[i * 2U] | (src[i * 2U + 1U] << 8));
     }
@@ -193,7 +218,7 @@ static void pma_write(uint16_t pma_offset, const uint8_t *src, uint16_t len)
 
 static void pma_read(uint16_t pma_offset, uint8_t *dst, uint16_t len)
 {
-    volatile uint16_t *src = &PMA(pma_offset / 2U);
+    volatile uint16_t *src = &PMA(pma_offset);
     for (uint16_t i = 0; i < len / 2U; i++) {
         uint16_t w = src[i * 2U];
         dst[i * 2U]      = (uint8_t)(w & 0xFFU);
@@ -344,7 +369,7 @@ static void handle_ep0(void)
             // OUT data stage, acknowledged and discarded
             ep0_send_zlp();
         }
-        BDT_COUNT_RX(0) = (1U << 15) | (1U << 10);  // 64 byte block
+        BDT_COUNT_RX(0) = COUNT_RX_64;
         ep_set_stat_rx(0, STAT_VALID);
     }
 
@@ -446,29 +471,29 @@ void usb_cdc_reset_endpoints(void)
     BDT_ADDR_TX(0)  = EP0_TX_ADDR;
     BDT_COUNT_TX(0) = 0;
     BDT_ADDR_RX(0)  = EP0_RX_ADDR;
-    BDT_COUNT_RX(0) = (1U << 15) | (1U << 10);   // BL_SIZE=1, 2 blocks of 32
-    USB->EP0R = 0x0200U | 0U;                    // CONTROL, address 0
+    BDT_COUNT_RX(0) = COUNT_RX_64;
+    USB->EP0R = EP_TYPE_CONTROL | 0U;
     ep_set_stat_rx(0, STAT_VALID);
     ep_set_stat_tx(0, STAT_NAK);
 
     // EP1, bulk IN
     BDT_ADDR_TX(1)  = EP1_TX_ADDR;
     BDT_COUNT_TX(1) = 0;
-    USB->EP1R = 0x0000U | 1U;                    // BULK, address 1
+    USB->EP1R = EP_TYPE_BULK | 1U;
     ep_set_stat_tx(1, STAT_NAK);
     ep_set_stat_rx(1, STAT_DISABLED);
 
     // EP2, bulk OUT
     BDT_ADDR_RX(2)  = EP2_RX_ADDR;
-    BDT_COUNT_RX(2) = (1U << 15) | (1U << 10);
-    USB->EP2R = 0x0000U | 2U;                    // BULK, address 2
+    BDT_COUNT_RX(2) = COUNT_RX_64;
+    USB->EP2R = EP_TYPE_BULK | 2U;
     ep_set_stat_rx(2, STAT_VALID);
     ep_set_stat_tx(2, STAT_DISABLED);
 
     // EP3, interrupt IN for notifications, never written
     BDT_ADDR_TX(3)  = EP3_TX_ADDR;
     BDT_COUNT_TX(3) = 0;
-    USB->EP3R = 0x0600U | 3U;                    // INTERRUPT, address 3
+    USB->EP3R = EP_TYPE_INTERRUPT | 3U;
     ep_set_stat_tx(3, STAT_NAK);
     ep_set_stat_rx(3, STAT_DISABLED);
 
