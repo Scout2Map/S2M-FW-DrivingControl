@@ -34,6 +34,7 @@
 
 typedef struct {
     TIM_TypeDef *tim;       // timer owning both PWM channels
+    int8_t       invert;    // mirrored mounting, see MOTx_INVERT
     int16_t      target;    // requested duty, permille, signed
     int16_t      applied;   // duty actually written, after slew limiting
     int8_t       last_sign; // previous direction, for deadtime detection
@@ -108,6 +109,9 @@ void motor_init(void)
 
     for (int i = 0; i < MOTOR_COUNT; i++) {
         s_mot[i].tim        = (i == MOTOR_LEFT) ? TIM2 : TIM3;
+        s_mot[i].invert     = (i == MOTOR_LEFT)
+                              ? (MOTL_INVERT ? -1 : 1)
+                              : (MOTR_INVERT ? -1 : 1);
         s_mot[i].target     = 0;
         s_mot[i].applied    = 0;
         s_mot[i].last_sign  = 0;
@@ -137,13 +141,21 @@ void motor_estop(void)
     s_enabled = 0;
 
     for (int i = 0; i < MOTOR_COUNT; i++) {
-        s_mot[i].target   = 0;
-        s_mot[i].applied  = 0;
-        s_mot[i].stall_ms = 0;
+        s_mot[i].target    = 0;
+        s_mot[i].applied   = 0;
+        s_mot[i].stall_ms  = 0;
+        // Clearing the direction memory means the first command after a
+        // stop never has to pay for a reversal it did not request
+        s_mot[i].last_sign = 0;
+        s_mot[i].dead_until = 0;
         pwm_write(s_mot[i].tim, 0, 0);
     }
 }
 
+// Applies the mounting inversion here, at the single entry point, so
+// the slew limiter, the direction deadtime and the stall guard all
+// operate on the sign the hardware will really see. Inverting further
+// down would let those three disagree with each other.
 void motor_set(motor_id_t id, int16_t duty_permille)
 {
     if (id >= MOTOR_COUNT) {
@@ -151,7 +163,7 @@ void motor_set(motor_id_t id, int16_t duty_permille)
     }
     if (duty_permille >  DUTY_MAX) duty_permille =  DUTY_MAX;
     if (duty_permille < -DUTY_MAX) duty_permille = -DUTY_MAX;
-    s_mot[id].target = duty_permille;
+    s_mot[id].target = (int16_t)(duty_permille * s_mot[id].invert);
 }
 
 uint8_t motor_is_enabled(void)
@@ -180,6 +192,33 @@ void motor_update(void)
     for (int i = 0; i < MOTOR_COUNT; i++) {
         motor_ch_t *m = &s_mot[i];
 
+        // Deadtime is a state, not a per-loop test.
+        //
+        // An earlier version re-evaluated the reversal condition every
+        // loop. Slew would step applied off zero toward the new sign,
+        // that tripped the check, applied was forced back to zero and
+        // last_sign never updated because sign had been zeroed. The
+        // wheel then sat still forever on any direction change. Holding
+        // an explicit window and committing the new direction when it
+        // expires makes the transition happen exactly once.
+        if (now < m->dead_until) {
+            m->applied = 0;
+            pwm_write(m->tim, 0, 0);
+            continue;
+        }
+
+        int8_t want = (m->target > 0) ? 1 : ((m->target < 0) ? -1 : 0);
+
+        // Entering a reversal: coast briefly before the bridge is asked
+        // to conduct the other way
+        if (want != 0 && m->last_sign != 0 && want != m->last_sign) {
+            m->dead_until = now + DIR_CHANGE_DEADTIME_MS;
+            m->applied    = 0;
+            m->last_sign  = 0;      // committed, the next pass may proceed
+            pwm_write(m->tim, 0, 0);
+            continue;
+        }
+
         // Slew limit so the gearbox and the battery rail are not shocked
         int16_t delta = m->target - m->applied;
         if (delta >  DUTY_SLEW_PER_LOOP) delta =  DUTY_SLEW_PER_LOOP;
@@ -187,16 +226,11 @@ void motor_update(void)
         m->applied += delta;
 
         int8_t sign = (m->applied > 0) ? 1 : ((m->applied < 0) ? -1 : 0);
-
-        // Direction reversal opens a short window with both outputs at zero
-        if (sign != 0 && m->last_sign != 0 && sign != m->last_sign) {
-            m->dead_until = now + DIR_CHANGE_DEADTIME_MS;
-            m->applied = 0;
-            sign = 0;
+        if (sign != 0) {
+            m->last_sign = sign;
         }
-        m->last_sign = (sign != 0) ? sign : m->last_sign;
 
-        if (now < m->dead_until || !s_enabled) {
+        if (!s_enabled) {
             pwm_write(m->tim, 0, 0);
             continue;
         }

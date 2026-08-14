@@ -69,7 +69,11 @@ static float       s_heading_ref;
 static uint8_t     s_heading_lock;
 static uint8_t     s_raw_mode;         // direct duty injection active
 static int16_t     s_raw[IDX_COUNT];
-static int16_t     s_duty[IDX_COUNT];  // last applied, reported in telemetry
+// Logical duty, before motor.c applies the mounting inversion. Reported
+// as is so a forward command reads positive on both wheels, which is
+// what someone reading telemetry expects. The electrical sign is an
+// implementation detail of how the motors happen to be bolted on.
+static int16_t     s_duty[IDX_COUNT];
 
 // Pose integrated on the MCU for slip detection and debugging
 // The SBC owns the TF tree, this is not the SLAM input

@@ -91,6 +91,16 @@
 // Pin map
 // ============================================================
 
+// ---- Motor direction ----
+// The two drive motors face opposite ways on the chassis, so one side
+// must be inverted for a positive command to move the robot forward.
+// Handled here rather than by swapping wires: the perfboard stays
+// consistent with the schematic, and a motor swap needs one edit.
+//
+// Measured on hardware 2026-08-14 with the chassis lifted.
+#define MOTL_INVERT             0       // verified, drives forward
+#define MOTR_INVERT             1       // verified, mounted mirrored
+
 // ---- Left motor driver (BTS7960 #1) ----
 #define MOTL_EN_PORT            GPIOB
 #define MOTL_EN_PIN             0U      // PB0, emergency stop path
@@ -112,9 +122,13 @@
 #define ENC_R_A_PIN             6U
 #define ENC_R_B_PIN             7U
 
-// Flip if a wheel counts down while being driven forward
-#define ENC_L_INVERT            0
-#define ENC_R_INVERT            1       // right motor is mounted mirrored
+// Measured on hardware 2026-08-14 with --raw and the chassis lifted,
+// then re-checked by turning each wheel forward by hand.
+//   left  : drove forward, counted down      -> invert
+//   right : counted down when turned forward -> do not invert, because
+//           MOTR_INVERT already corrects the drive direction
+#define ENC_L_INVERT            1       // verified
+#define ENC_R_INVERT            0       // verified
 
 // ---- IR distance sensor 2D120X ----
 #define DIST_ADC_PIN            4U      // PA4, ADC12_IN4
