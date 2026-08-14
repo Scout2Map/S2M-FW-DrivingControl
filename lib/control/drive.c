@@ -67,6 +67,9 @@ static uint8_t     s_openloop;      // 1 while the fallback path is active
 
 static float       s_heading_ref;
 static uint8_t     s_heading_lock;
+static uint8_t     s_raw_mode;         // direct duty injection active
+static int16_t     s_raw[IDX_COUNT];
+static int16_t     s_duty[IDX_COUNT];  // last applied, reported in telemetry
 
 // Pose integrated on the MCU for slip detection and debugging
 // The SBC owns the TF tree, this is not the SLAM input
@@ -104,6 +107,9 @@ void drive_init(const drive_io_t *io)
 
     s_heading_ref  = 0.0f;
     s_heading_lock = 0;
+    s_raw_mode     = 0;
+    s_raw[IDX_LEFT] = s_raw[IDX_RIGHT] = 0;
+    s_duty[IDX_LEFT] = s_duty[IDX_RIGHT] = 0;
     s_odom_x = s_odom_y = s_odom_th = 0.0f;
 }
 
@@ -112,6 +118,37 @@ void drive_command(float v_mps, float w_radps)
     s_v_cmd     = v_mps;
     s_w_cmd     = w_radps;
     s_cmd_stamp = s_io->millis();
+    // A normal velocity command always ends raw mode, so a forgotten
+    // bring-up command cannot keep overriding the controller
+    s_raw_mode  = 0;
+}
+
+void drive_set_raw(int16_t left_permille, int16_t right_permille)
+{
+    s_raw[IDX_LEFT]  = left_permille;
+    s_raw[IDX_RIGHT] = right_permille;
+    s_raw_mode       = 1;
+    s_cmd_stamp      = s_io->millis();
+}
+
+uint8_t drive_cmd_expired(void)
+{
+    return (uint8_t)((s_io->millis() - s_cmd_stamp) > CMD_TIMEOUT_MS);
+}
+
+int16_t drive_get_duty(int idx)
+{
+    return (idx >= 0 && idx < IDX_COUNT) ? s_duty[idx] : 0;
+}
+
+// Single point where duty reaches the hardware, so the reported value
+// and the applied value can never disagree
+static void apply_duty(int16_t left, int16_t right)
+{
+    s_duty[IDX_LEFT]  = left;
+    s_duty[IDX_RIGHT] = right;
+    s_io->set_duty(IDX_LEFT,  left);
+    s_io->set_duty(IDX_RIGHT, right);
 }
 
 void drive_stop(void)
@@ -123,8 +160,7 @@ void drive_stop(void)
         s_pid[i].integral = 0.0f;
         s_pid[i].prev_err = 0.0f;
     }
-    s_io->set_duty(IDX_LEFT, 0);
-    s_io->set_duty(IDX_RIGHT, 0);
+    apply_duty(0, 0);
 }
 
 void drive_get_odom(float *x, float *y, float *th)
@@ -221,6 +257,24 @@ void drive_update(void)
         return;
     }
 
+#if ENCODER_AVAILABLE
+    // Raw mode still samples encoders so telemetry and odometry stay
+    // live while the controller is bypassed
+    if (s_raw_mode) {
+        s_io->sample_encoders();
+        odom_integrate();
+        apply_duty(s_raw[IDX_LEFT], s_raw[IDX_RIGHT]);
+        s_io->commit();
+        return;
+    }
+#else
+    if (s_raw_mode) {
+        apply_duty(s_raw[IDX_LEFT], s_raw[IDX_RIGHT]);
+        s_io->commit();
+        return;
+    }
+#endif
+
     // Clamp the request to what the gearbox can actually deliver
     float v = clampf(s_v_cmd, -MAX_WHEEL_SPEED_MPS, MAX_WHEEL_SPEED_MPS);
     // Rotating faster than this smears a LiDAR scan badly enough to hurt
@@ -238,10 +292,8 @@ void drive_update(void)
     encoder_health_check();
 
     if (!s_openloop) {
-        s_io->set_duty(IDX_LEFT,
-                       pid_step(IDX_LEFT,  v_left,  s_io->get_speed_mps(IDX_LEFT)));
-        s_io->set_duty(IDX_RIGHT,
-                       pid_step(IDX_RIGHT, v_right, s_io->get_speed_mps(IDX_RIGHT)));
+        apply_duty(pid_step(IDX_LEFT,  v_left,  s_io->get_speed_mps(IDX_LEFT)),
+                   pid_step(IDX_RIGHT, v_right, s_io->get_speed_mps(IDX_RIGHT)));
         s_io->commit();
         return;
     }
@@ -277,9 +329,7 @@ void drive_update(void)
         right = (right > 0) ? (float)DUTY_MIN_MOVE : -(float)DUTY_MIN_MOVE;
     }
 
-    s_io->set_duty(IDX_LEFT,
-                   (int16_t)clampf(left,  -(float)DUTY_MAX, (float)DUTY_MAX));
-    s_io->set_duty(IDX_RIGHT,
-                   (int16_t)clampf(right, -(float)DUTY_MAX, (float)DUTY_MAX));
+    apply_duty((int16_t)clampf(left,  -(float)DUTY_MAX, (float)DUTY_MAX),
+               (int16_t)clampf(right, -(float)DUTY_MAX, (float)DUTY_MAX));
     s_io->commit();
 }

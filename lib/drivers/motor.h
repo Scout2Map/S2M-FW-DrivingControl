@@ -22,6 +22,7 @@ void    motor_enable(void);
 void    motor_estop(void);
 void    motor_set(motor_id_t id, int16_t duty_permille);
 void    motor_update(void);
+uint8_t motor_is_enabled(void);
 uint8_t motor_get_fault(void);
 void    motor_clear_fault(void);
 

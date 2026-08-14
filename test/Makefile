@@ -1,23 +1,28 @@
-# Host build of the hardware independent control layer
-# No cross toolchain and no board required
+# Host build of the hardware independent layers.
+# No cross toolchain and no board required.
 
 CC     = gcc
 CFLAGS = -std=c11 -Wall -Wextra -O1 -g
 CFLAGS += -I../lib/control -I../config
 LDLIBS = -lm
 
-SRCS = test_drive.c ../lib/control/drive.c
+all: run_drive run_framing
 
-all: run
-
-run: build/test_drive
+run_drive: build/test_drive
 	@./build/test_drive
 
-build/test_drive: $(SRCS)
+run_framing: build/test_framing
+	@./build/test_framing
+
+build/test_drive: test_drive.c ../lib/control/drive.c
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(SRCS) $(LDLIBS) -o $@
+	$(CC) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+build/test_framing: test_framing.c ../lib/control/framing.c ../lib/control/protocol.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 clean:
 	rm -rf build
 
-.PHONY: all run clean
+.PHONY: all run_drive run_framing clean

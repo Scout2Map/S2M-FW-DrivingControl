@@ -40,11 +40,18 @@ typedef struct {
 } drive_io_t;
 
 void    drive_init(const drive_io_t *io);
+
+// Direct duty injection, bypasses the velocity loop entirely.
+// Intended for bring-up: separates a wiring or gearing fault from a
+// control tuning fault. Cleared by the next drive_command().
+void    drive_set_raw(int16_t left_permille, int16_t right_permille);
 void    drive_command(float v_mps, float w_radps);
 void    drive_update(void);
 void    drive_stop(void);
 void    drive_get_odom(float *x, float *y, float *th);
 void    drive_reset_odom(void);
 uint8_t drive_is_openloop(void);
+uint8_t drive_cmd_expired(void);
+int16_t drive_get_duty(int idx);
 
 #endif

@@ -154,6 +154,11 @@ void motor_set(motor_id_t id, int16_t duty_permille)
     s_mot[id].target = duty_permille;
 }
 
+uint8_t motor_is_enabled(void)
+{
+    return s_enabled;
+}
+
 uint8_t motor_get_fault(void)
 {
     return s_fault;

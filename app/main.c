@@ -24,6 +24,7 @@
 #include "encoder.h"
 #include "led.h"
 #include "drive.h"
+#include "link.h"
 #include "calib.h"
 
 // ============================================================
@@ -64,6 +65,12 @@ int main(void)
 
     drive_init(board_io_get());
 
+    // USB comes up before the watchdog starts. Enumeration involves a
+    // deliberate D+ pulldown so a host that already saw this device
+    // re-enumerates after a firmware reset, and that pulldown outlasts
+    // IWDG_TIMEOUT_MS.
+    link_init();
+
     // Let the drivers and the UBEC rail settle
     systick_delay_ms(200);
 
@@ -96,8 +103,13 @@ int main(void)
 
         if ((now - t_telem) >= TELEM_PERIOD_MS) {
             t_telem = now;
-            // telem_send();  binary frame over USB CDC, added next
+            link_send_telemetry();
         }
+
+        // Drained every pass rather than on a timer. The USB ring is
+        // 256 bytes and a burst of commands must not be allowed to
+        // overflow it between scheduler slots.
+        link_poll_rx();
 
         // Heartbeat, a frozen LED means the loop died
         if ((now - t_led) >= 500U) {

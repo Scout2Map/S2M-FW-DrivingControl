@@ -165,6 +165,34 @@ int main(void)
     check("straight run accumulates x only", x > 0.25f && fabsf(y) < 0.01f);
     check("straight run leaves heading unchanged", fabsf(th) < 0.01f);
 
+    // --- raw duty injection ---
+    // Bring-up path: must bypass the PID entirely and report back
+    // exactly what was asked for
+    memset(g_speed, 0, sizeof g_speed);
+    g_now = 0;
+    drive_init(&stub_io);
+    drive_set_raw(400, -400);
+    g_now += LOOP_PERIOD_MS;
+    drive_update();
+    check("raw mode applies the requested duty verbatim",
+          g_duty[0] == 400 && g_duty[1] == -400);
+    check("raw duty is reported back in telemetry",
+          drive_get_duty(0) == 400 && drive_get_duty(1) == -400);
+
+    // A normal velocity command must end raw mode, otherwise a forgotten
+    // bring-up command would silently override the controller
+    hold(0.1f, 0.0f);
+    run_loops(20);
+    check("velocity command cancels raw mode",
+          g_duty[0] != 400 && g_duty[0] > 0);
+
+    // --- command timeout applies to raw mode too ---
+    drive_init(&stub_io);
+    drive_set_raw(400, 400);
+    run_loops_silent((CMD_TIMEOUT_MS / LOOP_PERIOD_MS) + 10);
+    check("raw mode still honours the command timeout",
+          g_duty[0] == 0 && g_duty[1] == 0);
+
     // --- verified encoder constants ---
     // Guards the bench measurement of 2026-08-13 against accidental edits
     check("encoder resolution matches the bench measurement",
