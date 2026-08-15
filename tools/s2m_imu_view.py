@@ -9,6 +9,7 @@ Author : jihoonkimtech
 Usage
     ./s2m_imu_view.py                   live view
     ./s2m_imu_view.py --bias            measure the gyro zero offset
+    ./s2m_imu_view.py --accel           live gravity readout, tilt and watch
     ./s2m_imu_view.py --axes            work out the mounting orientation
     ./s2m_imu_view.py --log imu.csv     record while viewing
 
@@ -156,10 +157,16 @@ def tilt_gauge(roll: float, pitch: float, width: int = 21) -> list:
     half = width // 2
     rows = []
     height = 7
-    # Negated so the marker moves the way a bubble level does: tilt the
-    # chassis left and the marker travels left. The raw angle sign is
-    # the opposite because positive roll lifts that side.
-    cx = max(0, min(width - 1, half - int(roll / 45.0 * half)))
+    # The marker sits on the side that is physically DOWN, so it tracks
+    # where the chassis would slide. With ROS convention (x forward,
+    # y left, z up) a positive roll lifts the left side, which puts the
+    # right side down, hence the positive sign here.
+    #
+    # This deliberately does NOT compensate for a misaligned sensor. If
+    # the marker moves the wrong way, the axis remap is wrong and the
+    # SBC is receiving an equally wrong pose; fix it with --axes rather
+    # than by flipping this line.
+    cx = max(0, min(width - 1, half + int(roll / 45.0 * half)))
     cy = max(0, min(height - 1, height // 2 + int(pitch / 45.0 * (height // 2))))
     for y in range(height):
         line = []
@@ -252,31 +259,89 @@ def render(t: dict, gz_hist: deque, bias: float, frames: int):
     sys.stdout.flush()
 
 
+# Each step puts one chassis axis vertical so gravity lands on exactly
+# the sensor axis aligned with it. Partial tilts do not identify anything.
 AXIS_STEPS = [
-    ("level, wheels on the ground", "z", +1,
-     "gravity should appear on the axis that points up"),
-    ("nose down, front edge lowered", "x", +1,
-     "identifies the forward axis"),
-    ("rolled onto its left side", "y", +1,
-     "identifies the left axis"),
+    ("flat on the floor, wheels down", "z",
+     "puts the chassis UP axis vertical"),
+    ("standing on its NOSE, rear pointing at the ceiling", "x",
+     "puts the chassis FORWARD axis vertical, tilt a full 90 degrees"),
+    ("lying on its RIGHT side, left flank pointing at the ceiling", "y",
+     "puts the chassis LEFT axis vertical, tilt a full 90 degrees"),
 ]
 
 
-def read_accel(ser, samples: int = 40):
-    """Averages a burst of accelerometer readings, in m/s2."""
+def read_accel(ser, samples: int = 40, settle: int = 25):
+    """Averages a burst of accelerometer readings, in m/s2.
+
+    Telemetry arrives at 50Hz and keeps filling the kernel serial buffer
+    while the caller waits at an input() prompt, so the first frames read
+    after that prompt describe the attitude the chassis was in BEFORE it
+    was moved. Flushing and then discarding a settling window is what
+    makes the reading correspond to the current pose."""
+    ser.reset_input_buffer()
+
     dec = Decoder()
     acc = [[], [], []]
+    seen = 0
     t0 = time.time()
-    while len(acc[0]) < samples and time.time() - t0 < 5.0:
+
+    while len(acc[0]) < samples and time.time() - t0 < 6.0:
         for mtype, payload in dec.feed(ser.read(256)):
-            if mtype == MSG_TELEMETRY:
-                t = parse_telemetry(payload)
-                acc[0].append(t["accel_x"] / 100.0)
-                acc[1].append(t["accel_y"] / 100.0)
-                acc[2].append(t["accel_z"] / 100.0)
-    if not acc[0]:
+            if mtype != MSG_TELEMETRY:
+                continue
+            seen += 1
+            if seen <= settle:
+                continue        # frames still in flight from before the flush
+            t = parse_telemetry(payload)
+            acc[0].append(t["accel_x"] / 100.0)
+            acc[1].append(t["accel_y"] / 100.0)
+            acc[2].append(t["accel_z"] / 100.0)
+
+    if len(acc[0]) < samples // 2:
         return None
     return [sum(a) / len(a) for a in acc]
+
+
+def watch_accel(ser):
+    """Live accelerometer readout with the dominant axis called out.
+
+    The stepwise identification below depends on holding an attitude and
+    trusting a snapshot. This mode instead lets the chassis be tilted
+    while watching gravity move, which makes a wrong reading obvious
+    rather than silently producing a wrong constant."""
+    print()
+    print("  live accelerometer. Tilt the chassis and watch which axis")
+    print("  takes the gravity. Ctrl-C to stop.")
+    print()
+    print("  For a correctly aligned module you should see:")
+    print("    flat on the floor            -> Z about +9.8")
+    print("    standing on its nose         -> X about -9.8")
+    print("    lying on its right flank     -> Y about -9.8")
+    print()
+
+    dec = Decoder()
+    sys.stdout.write(HIDE)
+    try:
+        while True:
+            for mtype, payload in dec.feed(ser.read(256)):
+                if mtype != MSG_TELEMETRY:
+                    continue
+                t = parse_telemetry(payload)
+                a = [t["accel_x"]/100.0, t["accel_y"]/100.0, t["accel_z"]/100.0]
+                mag = math.sqrt(sum(v*v for v in a))
+                idx = max(range(3), key=lambda i: abs(a[i]))
+                purity = abs(a[idx]) / mag if mag > 0.1 else 0.0
+                tag = f"{'XYZ'[idx]}{'+' if a[idx] > 0 else '-'}"
+                square = "square" if purity > 0.97 else f"{math.degrees(math.acos(min(1.0, purity))):4.0f} deg off"
+                sys.stdout.write(
+                    f"\r  x {a[0]:+6.2f}  y {a[1]:+6.2f}  z {a[2]:+6.2f}"
+                    f"   |a| {mag:5.2f}   gravity on {tag}   {square}      ")
+                sys.stdout.flush()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sys.stdout.write(SHOW + "\n")
 
 
 def identify_axes(ser):
@@ -290,29 +355,57 @@ def identify_axes(ser):
     print()
     print("  IMU axis identification")
     print("  " + "-" * 60)
-    print("  Gravity is the reference. Hold each attitude steady, then")
-    print("  press Enter. Nothing is written to the sensor; the result")
-    print("  is two constants to paste into config/board_config.h.")
+    print("  Gravity is the reference. Each step needs a FULL 90 degree")
+    print("  attitude, held still. Position the chassis first, then press")
+    print("  Enter and keep holding for about two seconds.")
+    print()
+    print("  Nothing is written to the sensor; the result is two")
+    print("  constants to paste into config/board_config.h.")
     print()
 
     # sensor axis index that carries gravity, and its sign, per attitude
     observed = {}
-    for label, chassis_axis, _, why in AXIS_STEPS:
+    for label, chassis_axis, why in AXIS_STEPS:
         print(f"  place the chassis: {label}")
         print(f"    ({why})")
         input("    Enter when steady... ")
         a = read_accel(ser)
         if a is None:
-            print("  no telemetry, aborting")
+            print("  not enough telemetry, aborting")
             return
-        # Gravity dominates; the largest component names the axis
+
+        mag = math.sqrt(a[0]*a[0] + a[1]*a[1] + a[2]*a[2])
         idx = max(range(3), key=lambda i: abs(a[i]))
         sign = 1 if a[idx] > 0 else -1
         print(f"    accel = ({a[0]:+6.2f}, {a[1]:+6.2f}, {a[2]:+6.2f}) m/s2"
+              f"   |a| {mag:5.2f}"
               f"   -> sensor {'XYZ'[idx]}{'+' if sign > 0 else '-'}")
-        if abs(a[idx]) < 7.0:
-            print("    WARNING gravity is spread across axes, the chassis")
-            print("            was probably not square to the floor")
+
+        # A stationary reading must be pure gravity. Anything else means
+        # the chassis was still moving when the samples were taken.
+        if abs(mag - 9.81) > 0.6:
+            print("    REJECTED the magnitude is not gravity, so the")
+            print("             chassis was moving during the reading.")
+            print("             Hold it still and repeat this step.")
+            return
+
+        # Gravity must land almost entirely on one axis, otherwise the
+        # attitude was not square and the mapping would be a guess.
+        if abs(a[idx]) < 9.0:
+            print("    REJECTED gravity is spread across axes, so the")
+            print(f"             chassis was about "
+                  f"{math.degrees(math.acos(min(1.0, abs(a[idx])/mag))):.0f} "
+                  f"degrees off square.")
+            print("             Repeat with the chassis properly square.")
+            return
+
+        if idx in [v[0] for v in observed.values()]:
+            prev = [k for k, v in observed.items() if v[0] == idx][0]
+            print(f"    REJECTED the same sensor axis already carried")
+            print(f"             gravity in the '{prev}' step, so the")
+            print("             chassis did not actually change attitude.")
+            return
+
         observed[chassis_axis] = (idx, sign)
         print()
 
@@ -393,6 +486,8 @@ def main():
     ap.add_argument("--seconds", type=float, default=10.0)
     ap.add_argument("--axes", action="store_true",
                     help="identify how the module is mounted, using gravity")
+    ap.add_argument("--accel", action="store_true",
+                    help="live accelerometer readout, tilt and watch")
     ap.add_argument("--log", metavar="FILE", help="record samples as CSV")
     args = ap.parse_args()
 
@@ -400,6 +495,13 @@ def main():
         ser = serial.Serial(args.port, 115200, timeout=0.05)
     except serial.SerialException as e:
         sys.exit(f"cannot open {args.port}: {e}")
+
+    if args.accel:
+        try:
+            watch_accel(ser)
+        finally:
+            ser.close()
+        return
 
     if args.axes:
         try:
