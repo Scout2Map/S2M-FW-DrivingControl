@@ -111,6 +111,23 @@ def parse_telemetry(p: bytes) -> dict:
         "imu_calib", "reserved"), f))
 
 
+def accel_to_rp(t: dict):
+    """Roll and pitch straight from gravity, in degrees.
+
+    Independent of the quaternion and of whatever orientation convention
+    the sensor is configured for, so disagreement between this and the
+    fused attitude localises the fault to one or the other."""
+    ax = t["accel_x"] / 100.0
+    ay = t["accel_y"] / 100.0
+    az = t["accel_z"] / 100.0
+    if abs(ax) + abs(ay) + abs(az) < 1.0:
+        return 0.0, 0.0
+    # ROS convention: x forward, y left, z up
+    roll = math.degrees(math.atan2(ay, az))
+    pitch = math.degrees(math.atan2(-ax, math.sqrt(ay*ay + az*az)))
+    return roll, pitch
+
+
 def quat_to_euler(t: dict):
     """Returns roll, pitch, yaw in degrees. Zero when the quaternion is
     still all zeros, which is what a pre-init read looks like."""
@@ -153,7 +170,12 @@ def bar(value: int, maximum: int = 3, width: int = 12) -> str:
 
 
 def tilt_gauge(roll: float, pitch: float, width: int = 21) -> list:
-    """Small cross hair showing tilt, saturating at 45 degrees."""
+    """Small cross hair showing tilt, saturating at 45 degrees.
+
+    Viewed from above with the nose at the top of the screen. The marker
+    always sits on the side that is physically lower, so lifting the
+    nose sends it toward the bottom and dropping the left side sends it
+    to the left."""
     half = width // 2
     rows = []
     height = 7
@@ -167,7 +189,12 @@ def tilt_gauge(roll: float, pitch: float, width: int = 21) -> list:
     # SBC is receiving an equally wrong pose; fix it with --axes rather
     # than by flipping this line.
     cx = max(0, min(width - 1, half + int(roll / 45.0 * half)))
-    cy = max(0, min(height - 1, height // 2 + int(pitch / 45.0 * (height // 2))))
+    # Screen up is the nose. Positive pitch tips the nose down, which
+    # makes the nose the low side, so the marker rises. Negating here is
+    # what keeps pitch consistent with roll: both put the marker on the
+    # side that is physically lower.
+    cy = max(0, min(height - 1,
+                    height // 2 - int(pitch / 45.0 * (height // 2))))
     for y in range(height):
         line = []
         for x in range(width):
@@ -210,8 +237,12 @@ def render(t: dict, gz_hist: deque, bias: float, frames: int):
     out.append("  " + compass(yaw).replace("\n", "\n  "))
     out.append("")
 
+    a_roll, a_pitch = accel_to_rp(t)
     gauge = tilt_gauge(roll, pitch)
-    out.append(f"  roll {roll:7.2f}      pitch {pitch:7.2f}")
+    out.append(f"  roll {roll:7.2f}      pitch {pitch:7.2f}   (fused)")
+    out.append(f"       {a_roll:7.2f}            {a_pitch:7.2f}   (gravity)")
+    if abs(roll - a_roll) > 15.0 or abs(pitch - a_pitch) > 15.0:
+        out.append("       fused and gravity disagree, see --axes")
     for row in gauge:
         out.append("     " + row)
     out.append("")
@@ -264,10 +295,10 @@ def render(t: dict, gz_hist: deque, bias: float, frames: int):
 AXIS_STEPS = [
     ("flat on the floor, wheels down", "z",
      "puts the chassis UP axis vertical"),
-    ("standing on its NOSE, rear pointing at the ceiling", "x",
-     "puts the chassis FORWARD axis vertical, tilt a full 90 degrees"),
+    ("standing on its TAIL, nose pointing at the ceiling", "x",
+     "puts the chassis FORWARD axis pointing UP, a full 90 degrees"),
     ("lying on its RIGHT side, left flank pointing at the ceiling", "y",
-     "puts the chassis LEFT axis vertical, tilt a full 90 degrees"),
+     "puts the chassis LEFT axis pointing UP, a full 90 degrees"),
 ]
 
 
@@ -314,10 +345,12 @@ def watch_accel(ser):
     print("  live accelerometer. Tilt the chassis and watch which axis")
     print("  takes the gravity. Ctrl-C to stop.")
     print()
-    print("  For a correctly aligned module you should see:")
-    print("    flat on the floor            -> Z about +9.8")
-    print("    standing on its nose         -> X about -9.8")
-    print("    lying on its right flank     -> Y about -9.8")
+    print("  With the axis remap applied the output is already in")
+    print("  chassis coordinates, so gravity lands on whichever chassis")
+    print("  axis points at the CEILING:")
+    print("    flat on the floor, wheels down   -> Z about +9.8  (up)")
+    print("    nose on the floor, tail up       -> X about -9.8  (forward down)")
+    print("    lying on the right flank         -> Y about +9.8  (left up)")
     print()
 
     dec = Decoder()
@@ -355,9 +388,12 @@ def identify_axes(ser):
     print()
     print("  IMU axis identification")
     print("  " + "-" * 60)
-    print("  Gravity is the reference. Each step needs a FULL 90 degree")
-    print("  attitude, held still. Position the chassis first, then press")
-    print("  Enter and keep holding for about two seconds.")
+    print("  Gravity is the reference. Every step points one chassis")
+    print("  axis at the CEILING; the accelerometer then reads +9.8 on")
+    print("  whichever sensor axis lines up with it.")
+    print()
+    print("  Each step needs a FULL 90 degrees, held still. Position the")
+    print("  chassis first, then press Enter and hold for two seconds.")
     print()
     print("  Nothing is written to the sensor; the result is two")
     print("  constants to paste into config/board_config.h.")
@@ -409,13 +445,63 @@ def identify_axes(ser):
         observed[chassis_axis] = (idx, sign)
         print()
 
-    # In each attitude the chassis axis named points up, so gravity
-    # measured along it reads positive on the sensor axis that aligns
-    # with it. That gives a direct chassis -> sensor mapping.
+    # Two attitudes are enough. The chassis frame is right handed, so
+    # once forward and up are known, left is forced by Y = Z x X. The
+    # third measurement is kept as a cross-check rather than a third
+    # independent input, because a single mispositioned step would
+    # otherwise yield a reflection that looks like a valid answer.
     order = ["x", "y", "z"]
     if len(observed) != 3 or len({v[0] for v in observed.values()}) != 3:
         print("  the three attitudes did not resolve to distinct axes.")
         print("  repeat with the chassis square to the floor each time.")
+        return
+
+    def as_vec(pair):
+        idx, sign = pair
+        v = [0, 0, 0]
+        v[idx] = sign
+        return v
+
+    def cross(a, b):
+        return [a[1]*b[2] - a[2]*b[1],
+                a[2]*b[0] - a[0]*b[2],
+                a[0]*b[1] - a[1]*b[0]]
+
+    fwd = as_vec(observed["x"])
+    up = as_vec(observed["z"])
+    derived_left = cross(up, fwd)
+    measured_left = as_vec(observed["y"])
+
+    if derived_left != measured_left:
+        d_idx = max(range(3), key=lambda i: abs(derived_left[i]))
+        m_idx = max(range(3), key=lambda i: abs(measured_left[i]))
+        print("  the third attitude disagrees with the first two.")
+        print(f"    forward and up imply  LEFT = {'XYZ'[d_idx]}"
+              f"{'+' if derived_left[d_idx] > 0 else '-'}")
+        print(f"    but the step measured LEFT = {'XYZ'[m_idx]}"
+              f"{'+' if measured_left[m_idx] > 0 else '-'}")
+        print("  the chassis was most likely rolled onto the wrong side.")
+        print("  using the value derived from the first two attitudes.")
+        observed["y"] = (d_idx, 1 if derived_left[d_idx] > 0 else -1)
+        print()
+
+    # A remap is a rotation, so its determinant must be +1. A result of
+    # -1 is a reflection, which no mounting can produce, and means one
+    # of the three attitudes was the opposite of what was asked for.
+    basis = []
+    for chassis_axis in order:
+        src, sign = observed[chassis_axis]
+        col = [0, 0, 0]
+        col[src] = sign
+        basis.append(col)
+    det = (basis[0][0]*(basis[1][1]*basis[2][2] - basis[1][2]*basis[2][1])
+         - basis[0][1]*(basis[1][0]*basis[2][2] - basis[1][2]*basis[2][0])
+         + basis[0][2]*(basis[1][0]*basis[2][1] - basis[1][1]*basis[2][0]))
+    if det != 1:
+        print(f"  the three readings imply a reflection (det {det:+d}),")
+        print("  which no physical mounting can produce. One attitude was")
+        print("  inverted; check that every step pointed the named axis")
+        print("  at the CEILING, then repeat.")
         return
 
     cfg = 0

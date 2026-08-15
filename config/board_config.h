@@ -158,12 +158,21 @@
 // 0x24 / 0x00 is the power on default and applies no rotation.
 // The remap register is writable only in CONFIG mode.
 //
-// TODO set from measurement. Run  ./tools/s2m_imu_view.py --axes
-// and follow the printed procedure. Until then the reported attitude
-// is in sensor frame, not chassis frame, and the SBC will see a pose
-// that is rotated relative to the URDF.
-#define BNO055_AXIS_MAP         0x24U   // identity, pending measurement
-#define BNO055_AXIS_SIGN        0x00U
+// Measured with --axes. The module sits flat with its pin header
+// facing the rear of the chassis, which is a 180 degree rotation
+// about Z:
+//   chassis forward = sensor X-
+//   chassis left    = sensor Y-
+//   chassis up      = sensor Z+
+//
+// Only two attitudes are needed to establish this; the third axis is
+// forced by the right hand rule (Y = Z x X). Without the remap the
+// reported roll carries the opposite sign, which is how the mounting
+// was noticed in the first place.
+//
+// Re-run ./tools/s2m_imu_view.py --axes if the module is remounted.
+#define BNO055_AXIS_MAP         0x24U   // verified, sources unchanged
+#define BNO055_AXIS_SIGN        0x06U   // verified, X and Y negated
 
 // ---- Status LED ----
 // This core board is NOT a stock Blue Pill. Its schematic wires the
