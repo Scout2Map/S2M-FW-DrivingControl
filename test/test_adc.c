@@ -151,13 +151,13 @@ int main(void)
 
     // --- the calibration reproduces the bench measurement ---
     {
-        // firmware read 11035 mV before calibration, meter said 10960
-        uint32_t counts = 2739U;
+        // 2718 counts measured 10.840 V on the meter
+        uint32_t counts = 2718U;
         uint32_t mv = (counts * BATT_UV_PER_COUNT) / 1000U;
-        printf("   %u counts -> %u mV, meter measured 10960\n",
+        printf("   %u counts -> %u mV, meter measured 10840\n",
                (unsigned)counts, (unsigned)mv);
         check("calibrated scale matches the meter within 20 mV",
-              mv > 10940U && mv < 10980U);
+              mv > 10820U && mv < 10860U);
     }
 
     // --- arithmetic cannot overflow ---

@@ -158,13 +158,19 @@
 // resistor tolerance, the regulator's actual output and ADC gain error
 // all land on the same term, and one measurement absorbs all of them.
 //
-// Calibrated against a multimeter: the firmware read 11.035 V where the
-// meter read 10.960 V, a 0.68 percent error.
+// Calibrated against a multimeter: 2718 counts read 10.840 V.
+//
+// Two separate calibrations gave 4002 and 3988, a 0.35 percent spread.
+// That is inside a typical meter's own tolerance and moves each
+// threshold by about 35 mV against 300 mV of hysteresis, so it is not
+// worth chasing.
 //
 // Recalibrate with  ./tools/s2m_console.py --calib-batt  after changing
-// either divider resistor. Single point calibration assumes the divider
-// has no offset, which is true for a resistive network.
-#define BATT_UV_PER_COUNT       4002U   // calibrated
+// either divider resistor. Single point calibration is deliberate: the
+// two readings above sit only 21 counts apart, and fitting a slope
+// through points that close would amplify meter noise into a large
+// false offset. A resistive divider has no real offset to find.
+#define BATT_UV_PER_COUNT       3988U   // calibrated
 
 // 3S lithium polymer. These are REPORTING thresholds; the SBC owns what
 // to do about them. Returning to the start point and flushing buffered
