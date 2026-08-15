@@ -138,7 +138,10 @@
 // Moved off PB6/PB7 because TIM4 now owns those pins
 #define IMU_I2C_SCL_PIN         10U     // PB10
 #define IMU_I2C_SDA_PIN         11U     // PB11
-#define BNO055_ADDR             0x28U   // 0x29 if the COM3 pin is pulled high
+// Confirmed by bus scan 2026-08-14: this module answers at 0x29, so its
+// ADR/COM3 pin is tied high on the breakout. The 0x28 in most example
+// code refers to boards that pull it low.
+#define BNO055_ADDR             0x29U   // verified by scan
 
 // ---- Status LED ----
 // This core board is NOT a stock Blue Pill. Its schematic wires the
