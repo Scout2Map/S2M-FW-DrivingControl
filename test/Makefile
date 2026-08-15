@@ -6,7 +6,7 @@ CFLAGS = -std=c11 -Wall -Wextra -O1 -g
 CFLAGS += -I../lib/control -I../config
 LDLIBS = -lm
 
-all: run_drive run_framing run_motor
+all: run_drive run_framing run_motor run_timing
 
 run_drive: build/test_drive
 	@./build/test_drive
@@ -17,11 +17,18 @@ run_framing: build/test_framing
 run_motor: build/test_motor
 	@./build/test_motor
 
+run_timing: build/test_timing
+	@./build/test_timing
+
 build/test_drive: test_drive.c ../lib/control/drive.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) $^ $(LDLIBS) -o $@
 
 build/test_framing: test_framing.c ../lib/control/framing.c ../lib/control/protocol.c
+	@mkdir -p build
+	$(CC) $(CFLAGS) $^ $(LDLIBS) -o $@
+
+build/test_timing: test_timing.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) $^ $(LDLIBS) -o $@
 
@@ -32,4 +39,4 @@ build/test_motor: test_motor.c
 clean:
 	rm -rf build
 
-.PHONY: all run_drive run_framing run_motor clean
+.PHONY: all run_drive run_framing run_motor run_timing clean

@@ -10,7 +10,11 @@
 #include <stdint.h>
 
 void     bno055_init(void);
-void     bno055_poll(void);      // call at IMU_PERIOD_MS, never blocks
+// Starts a read cycle. Call at IMU_PERIOD_MS.
+void     bno055_poll(void);
+// Advances the transfer in flight. Call every main loop pass; a single
+// I2C phase must complete well inside I2C_TIMEOUT_MS.
+void     bno055_pump(void);
 uint8_t  bno055_is_ok(void);
 
 // Raw fusion output at the device native scaling, forwarded to the SBC

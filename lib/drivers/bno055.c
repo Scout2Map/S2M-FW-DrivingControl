@@ -100,6 +100,8 @@ static int16_t s_quat[4];       // w, x, y, z at 1/16384 scale
 static int16_t s_gyro[3];       // x, y, z at 1/16 deg/s
 static uint8_t s_calib;         // packed sys/gyr/acc/mag, 2 bits each
 
+static void run_poll(void);
+
 static void wait_ms(uint32_t ms)
 {
     s_wait_until = systick_millis() + ms;
@@ -245,22 +247,43 @@ static uint8_t init_poll(void)
     return 0;
 }
 
-// Called at IMU_PERIOD_MS. Never blocks.
-void bno055_poll(void)
+// Advances the transfer in flight. Must be called every main loop pass,
+// not on the IMU period.
+//
+// The two rates are separate for a reason. A single I2C phase completes
+// in tens of microseconds, and i2c.c aborts a phase that takes longer
+// than I2C_TIMEOUT_MS. Driving the state machine from the 10ms IMU slot
+// meant every phase was already past its 5ms budget by the time the
+// next call arrived, so every transfer timed out on its first step and
+// the device never answered at all.
+void bno055_pump(void)
 {
     if (!s_ready) {
         (void)init_poll();
         return;
     }
+    run_poll();
+}
 
-    i2c_result_t r;
-
-    switch (s_run) {
-    case RUN_IDLE:
+// Called at IMU_PERIOD_MS. Starts a fresh read cycle if the previous
+// one has finished; the transfer itself is advanced by bno055_pump().
+void bno055_poll(void)
+{
+    if (s_ready && s_run == RUN_IDLE) {
         // Quaternion first, it is what the SBC actually consumes
         if (i2c_start_read(BNO055_ADDR, REG_QUA_DATA, s_buf, 8)) {
             s_run = RUN_READ_QUAT;
         }
+    }
+}
+
+static void run_poll(void)
+{
+    i2c_result_t r;
+
+    switch (s_run) {
+    case RUN_IDLE:
+        // Waiting for the next IMU slot to start a cycle
         break;
 
     case RUN_READ_QUAT:

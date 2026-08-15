@@ -116,6 +116,12 @@ int main(void)
         // overflow it between scheduler slots.
         link_poll_rx();
 
+        // Same reasoning: an I2C phase completes in tens of
+        // microseconds and is abandoned after I2C_TIMEOUT_MS, so the
+        // transfer has to be advanced far more often than the 10ms
+        // slot that decides when to start one.
+        bno055_pump();
+
         // Heartbeat, a frozen LED means the loop died
         if ((now - t_led) >= 500U) {
             t_led = now;
