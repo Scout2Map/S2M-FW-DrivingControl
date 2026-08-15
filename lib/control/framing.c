@@ -24,9 +24,11 @@ static uint8_t frame_type_known(uint8_t type)
     case MSG_CMD_RESET_ODOM:
     case MSG_CMD_CLEAR_FAULT:
     case MSG_CMD_PING:
+    case MSG_CMD_DIAG:
     case MSG_TELEMETRY:
     case MSG_PONG:
     case MSG_BOOT_INFO:
+    case MSG_DIAG:
         return 1;
     default:
         return 0;

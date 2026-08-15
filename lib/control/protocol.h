@@ -45,11 +45,13 @@
 #define MSG_CMD_RESET_ODOM  0x04U   // zero the integrated pose
 #define MSG_CMD_CLEAR_FAULT 0x05U   // release a latched motor fault
 #define MSG_CMD_PING        0x06U   // liveness probe, answered with PONG
+#define MSG_CMD_DIAG        0x07U   // request a diagnostics frame
 
 // ---- MCU to host ----
 #define MSG_TELEMETRY       0x81U   // periodic state dump
 #define MSG_PONG            0x86U   // reply to PING
 #define MSG_BOOT_INFO       0x87U   // sent once after enumeration
+#define MSG_DIAG            0x88U   // bring-up diagnostics, on request
 
 // ---- Status flags in telemetry ----
 #define STATUS_MOTOR_ENABLED    (1U << 0)
@@ -117,6 +119,20 @@ typedef struct __attribute__((packed)) {
     int16_t  duty_right;
     uint16_t status;            // STATUS_* bitfield
 } telemetry_t;
+
+// MSG_DIAG, 16 bytes
+// Everything needed to tell an absent sensor from a stuck bus from a
+// wrong address, without attaching a debugger.
+typedef struct __attribute__((packed)) {
+    uint8_t  imu_init_step;     // where the init state machine stopped
+    uint8_t  imu_chip_id;       // 0xA0 when a BNO055 answered
+    uint8_t  imu_calib;         // packed sys/gyr/acc/mag
+    uint8_t  reserved;
+    uint32_t imu_read_ok;
+    uint32_t imu_read_fail;
+    uint16_t i2c_errors;
+    uint16_t i2c_recoveries;
+} diag_t;
 
 // MSG_BOOT_INFO, 8 bytes
 // Lets the bridge verify it is talking to a firmware it understands

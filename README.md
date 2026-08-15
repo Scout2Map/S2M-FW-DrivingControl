@@ -439,6 +439,8 @@ RPi5와의 통신은 USB CDC-ACM으로 구현했다. 호스트 측 드라이버 
 | 0x81 | MCU → 호스트 | `TELEMETRY` | 48B, 50Hz |
 | 0x86 | MCU → 호스트 | `PONG` | 0B |
 | 0x87 | MCU → 호스트 | `BOOT_INFO` | 8B, 포트 오픈 시 1회 |
+| 0x07 | 호스트 → MCU | `CMD_DIAG` | 0B, 진단 요청 |
+| 0x88 | MCU → 호스트 | `DIAG` | 16B, 요청 시 |
 
 `BOOT_INFO`는 `COUNTS_PER_WHEEL_REV`와 트랙 폭을 함께 전송한다.
 호스트가 오도메트리 스케일을 하드코딩하지 않아도 되며, 모터 교체 시
@@ -635,6 +637,39 @@ BNO055는 지자계 캘리브레이션이 완료되어야 절대 방위가 정�
 
 캘리브레이션 이전에도 상대적 자세 변화는 사용 가능하나 절대 방위는
 드리프트할 수 있으므로, 상위 SBC는 이 비트를 참조하여 가중치를 조정한다.
+
+### 진단
+
+IMU가 동작하지 않을 때는 다음 명령으로 초기화 상태를 확인한다.
+
+```
+./tools/s2m_console.py --diag
+```
+
+출력 예시는 다음과 같다.
+
+```
+[diag] imu init stage : CHECK_ID
+       chip id        : 0xA0 (BNO055 ok)
+       calib sys/g/a/m: 3/3/3/2
+       reads ok/fail  : 1234 / 5
+       i2c err/recover: 7 / 2
+```
+
+| 증상 | 원인 |
+|---|---|
+| `WAIT_BOOT`에서 정지, chip id 0xFF | 응답 없음. 배선 또는 전원 확인 |
+| `CHECK_ID`에서 `FAILED`, chip id가 0xA0이 아님 | 주소 불일치 또는 다른 장치 |
+| `COMPLETE`인데 read fail 증가 | 버스 불안정. 풀업 저항 확인 |
+| `i2c recover` 계속 증가 | 슬레이브가 SDA를 잡고 있음 |
+
+chip id가 0xFF로 유지되면 장치가 전혀 응답하지 않는 것이다.
+확인 순서는 다음과 같다.
+
+1. BNO055 모듈에 전원이 인가되는지 (VIN 5V, GND 공통)
+2. SCL이 PB10, SDA가 PB11에 연결되었는지 (교차 연결 흔함)
+3. I2C 주소가 0x28인지 0x29인지 (모듈의 ADR/COM3 핀 상태)
+4. 풀업 저항이 존재하는지 (모듈 내장 여부 확인)
 
 ### 확인 방법
 

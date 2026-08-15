@@ -30,4 +30,9 @@ float    bno055_yaw_rad(void);
 uint32_t bno055_read_ok(void);
 uint32_t bno055_read_fail(void);
 
+// Diagnostics for bring-up. init_step follows the enum in bno055.c;
+// last_id holds whatever the chip ID register returned, 0xFF if never read.
+uint8_t  bno055_init_step(void);
+uint8_t  bno055_last_id(void);
+
 #endif

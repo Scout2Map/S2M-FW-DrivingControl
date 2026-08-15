@@ -93,6 +93,7 @@ static uint8_t     s_ready;
 static uint32_t    s_read_ok;
 static uint32_t    s_read_fail;
 static uint8_t     s_consecutive_fail;
+static uint8_t     s_chip_id;      // whatever the last ID read returned
 
 // Latest values, updated only on a complete successful burst
 static int16_t s_quat[4];       // w, x, y, z at 1/16384 scale
@@ -121,6 +122,7 @@ void bno055_init(void)
     memset(s_quat, 0, sizeof s_quat);
     memset(s_gyro, 0, sizeof s_gyro);
     s_calib = 0;
+    s_chip_id = 0xFF;
     wait_ms(BOOT_DELAY_MS);
 }
 
@@ -151,6 +153,7 @@ static uint8_t init_poll(void)
     case INIT_CHECK_ID:
         r = i2c_poll();
         if (r == I2C_RESULT_DONE) {
+            s_chip_id = s_buf[0];
             if (s_buf[0] == CHIP_ID_EXPECTED) {
                 s_init = INIT_SET_CONFIG;
             } else {
@@ -368,3 +371,8 @@ float bno055_yaw_rad(void)
 
 uint32_t bno055_read_ok(void)   { return s_read_ok; }
 uint32_t bno055_read_fail(void) { return s_read_fail; }
+
+// Diagnostics. Without these a failed bring-up looks identical whether
+// the device is absent, at the wrong address, or the bus is stuck.
+uint8_t bno055_init_step(void)  { return (uint8_t)s_init; }
+uint8_t bno055_last_id(void)    { return s_chip_id; }

@@ -12,6 +12,7 @@ Usage
     ./s2m_console.py --vel 100 0        drive at 100 mm/s straight
     ./s2m_console.py --step 150         step response capture for PID work
     ./s2m_console.py --imu              add heading and yaw rate columns
+    ./s2m_console.py --diag             IMU and I2C bring-up diagnostics
     ./s2m_console.py --estop            latch an emergency stop
 
 Note: the frame layout here mirrors lib/control/protocol.h. Change one
@@ -39,9 +40,11 @@ MSG_CMD_ESTOP       = 0x03
 MSG_CMD_RESET_ODOM  = 0x04
 MSG_CMD_CLEAR_FAULT = 0x05
 MSG_CMD_PING        = 0x06
+MSG_CMD_DIAG        = 0x07
 MSG_TELEMETRY       = 0x81
 MSG_PONG            = 0x86
 MSG_BOOT_INFO       = 0x87
+MSG_DIAG            = 0x88
 
 STATUS_BITS = [
     (1 << 0, "ENABLED"),
@@ -57,6 +60,7 @@ STATUS_BITS = [
 
 TELEMETRY_FMT = "<IiihhiiihhhhhHHhhH"
 BOOT_INFO_FMT = "<BBBBHH"
+DIAG_FMT      = "<BBBBIIHH"
 
 
 def crc16(data: bytes) -> int:
@@ -79,7 +83,8 @@ class Decoder:
 
     KNOWN = {MSG_CMD_VELOCITY, MSG_CMD_WHEEL_RAW, MSG_CMD_ESTOP,
              MSG_CMD_RESET_ODOM, MSG_CMD_CLEAR_FAULT, MSG_CMD_PING,
-             MSG_TELEMETRY, MSG_PONG, MSG_BOOT_INFO}
+             MSG_TELEMETRY, MSG_PONG, MSG_BOOT_INFO, MSG_CMD_DIAG,
+             MSG_DIAG}
 
     def __init__(self):
         self.buf = bytearray()
@@ -181,6 +186,21 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                       f"{v[4]} counts/rev  {v[5]} mm base")
             elif mtype == MSG_PONG:
                 print("[pong]")
+            elif mtype == MSG_DIAG:
+                d = struct.unpack(DIAG_FMT, payload)
+                steps = ["WAIT_BOOT", "READ_ID", "CHECK_ID", "SET_CONFIG",
+                         "WAIT_CONFIG", "SET_UNITS", "WAIT_UNITS",
+                         "SET_POWER", "WAIT_POWER", "SET_NDOF",
+                         "WAIT_NDOF", "COMPLETE", "FAILED"]
+                step = steps[d[0]] if d[0] < len(steps) else f"?{d[0]}"
+                cal = d[2]
+                print(f"[diag] imu init stage : {step}")
+                print(f"       chip id        : 0x{d[1]:02X} "
+                      f"({'BNO055 ok' if d[1] == 0xA0 else 'expected 0xA0'})")
+                print(f"       calib sys/g/a/m: {cal>>6}/{(cal>>4)&3}/"
+                      f"{(cal>>2)&3}/{cal&3}")
+                print(f"       reads ok/fail  : {d[4]} / {d[5]}")
+                print(f"       i2c err/recover: {d[6]} / {d[7]}")
             elif mtype == MSG_TELEMETRY:
                 t = parse_telemetry(payload)
                 if csv:
@@ -246,6 +266,8 @@ def main():
     ap.add_argument("--clear", action="store_true", help="clear a latched fault")
     ap.add_argument("--reset-odom", action="store_true")
     ap.add_argument("--ping", action="store_true")
+    ap.add_argument("--diag", action="store_true",
+                    help="dump IMU and I2C bring-up diagnostics")
     ap.add_argument("--csv", action="store_true")
     ap.add_argument("--imu", action="store_true",
                     help="show heading and yaw rate from the BNO055")
@@ -269,6 +291,9 @@ def main():
         elif args.ping:
             ser.write(encode(MSG_CMD_PING))
             run_monitor(ser, duration=1.0)
+        elif args.diag:
+            ser.write(encode(MSG_CMD_DIAG))
+            run_monitor(ser, duration=1.5)
         elif args.step is not None:
             run_step(ser, args.step, args.seconds)
         elif args.raw:

@@ -28,6 +28,7 @@
 #include "motor.h"
 #include "encoder.h"
 #include "bno055.h"
+#include "i2c.h"
 #include "systick.h"
 
 // Firmware version reported in MSG_BOOT_INFO
@@ -135,6 +136,20 @@ static void handle_command(uint8_t type, const uint8_t *payload, uint8_t len)
     case MSG_CMD_PING:
         send_frame(MSG_PONG, 0, 0);
         break;
+
+    case MSG_CMD_DIAG: {
+        diag_t d;
+        d.imu_init_step  = bno055_init_step();
+        d.imu_chip_id    = bno055_last_id();
+        d.imu_calib      = bno055_calib();
+        d.reserved       = 0;
+        d.imu_read_ok    = bno055_read_ok();
+        d.imu_read_fail  = bno055_read_fail();
+        d.i2c_errors     = (uint16_t)i2c_error_count();
+        d.i2c_recoveries = (uint16_t)i2c_recovery_count();
+        send_frame(MSG_DIAG, &d, sizeof d);
+        break;
+    }
 
     default:
         break;
