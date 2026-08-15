@@ -66,6 +66,7 @@ static uint8_t  s_dist_too_close;
 
 static uint32_t s_batt_filt;        // IIR accumulator, scaled by 16
 static uint16_t s_batt_mv;
+static uint16_t s_batt_counts;      // raw, exposed for recalibration
 static batt_state_t s_batt_state;
 static uint8_t  s_batt_primed;
 
@@ -108,6 +109,7 @@ void adc_init(void)
     s_dist_too_close = 0;
     s_batt_filt      = 0;
     s_batt_mv        = 0;
+    s_batt_counts    = 0;
     s_batt_state     = BATT_UNKNOWN;
     s_batt_primed    = 0;
 }
@@ -216,9 +218,11 @@ static void batt_sample(void)
         return;
     }
 
-    // Divider ratio 7.5 / (30 + 7.5) = 0.2, so the pack voltage is five
-    // times the pin voltage
-    uint32_t mv = ((uint32_t)counts_to_mv(counts) * 1000U) / BATT_DIVIDER_RATIO;
+    // Straight from counts using the calibrated scale, so the reading
+    // does not accumulate the error of the reference and the divider
+    // separately
+    uint32_t mv = ((uint32_t)counts * BATT_UV_PER_COUNT) / 1000U;
+    s_batt_counts = counts;
 
     if (!s_batt_primed) {
         // Seed the filter with the first reading, otherwise it ramps up
@@ -283,4 +287,5 @@ void adc_poll(void)
 uint16_t     dist_get_mm(void)    { return s_dist_mm; }
 uint8_t      dist_is_too_close(void) { return s_dist_too_close; }
 uint16_t     batt_get_mv(void)    { return s_batt_mv; }
+uint16_t     batt_get_counts(void) { return s_batt_counts; }
 batt_state_t batt_get_state(void) { return s_batt_state; }

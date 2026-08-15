@@ -150,7 +150,21 @@
 // 239.5 cycle sampling window supports.
 #define BATT_ADC_PIN            5U      // PA5, ADC12_IN5
 #define BATT_ADC_CHANNEL        5U
-#define BATT_DIVIDER_RATIO      200U    // parts per thousand
+
+// Pack millivolts per ADC count, in microvolts.
+//
+// A single constant rather than a chain of nominal values. The nominal
+// chain (3.3V reference, 4095 counts, 0.200 divider) predicts 4029, but
+// resistor tolerance, the regulator's actual output and ADC gain error
+// all land on the same term, and one measurement absorbs all of them.
+//
+// Calibrated against a multimeter: the firmware read 11.035 V where the
+// meter read 10.960 V, a 0.68 percent error.
+//
+// Recalibrate with  ./tools/s2m_console.py --calib-batt  after changing
+// either divider resistor. Single point calibration assumes the divider
+// has no offset, which is true for a resistive network.
+#define BATT_UV_PER_COUNT       4002U   // calibrated
 
 // 3S lithium polymer. These are REPORTING thresholds; the SBC owns what
 // to do about them. Returning to the start point and flushing buffered

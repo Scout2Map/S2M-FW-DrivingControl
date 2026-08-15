@@ -145,6 +145,11 @@ typedef struct __attribute__((packed)) {
     uint32_t imu_read_fail;
     uint16_t i2c_errors;
     uint16_t i2c_recoveries;
+    // Raw ADC counts behind the last battery sample. Recalibration
+    // needs the count, not the scaled value, so the constant being
+    // calibrated does not appear on both sides of the calculation.
+    uint16_t batt_counts;
+    uint16_t batt_mv;
 } diag_t;
 
 // MSG_I2C_SCAN, 17 bytes

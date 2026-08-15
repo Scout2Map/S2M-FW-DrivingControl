@@ -139,14 +139,30 @@ int main(void)
     check("dead recovery hysteresis cannot reach critical",
           BATT_DEAD_MV + BATT_HYST_MV * 2U < BATT_CRITICAL_MV + BATT_HYST_MV);
 
-    // --- divider cannot overrange the ADC ---
+    // --- the calibrated scale must span the pack without clipping ---
     {
-        uint32_t full_mv = 12900U * BATT_DIVIDER_RATIO / 1000U;
-        printf("   12.9 V charged pack presents %u mV at the pin\n",
-               (unsigned)full_mv);
-        check("a fully charged pack stays inside the 3.3 V reference",
-              full_mv < 3300U);
+        uint32_t top_mv = (4095U * BATT_UV_PER_COUNT) / 1000U;
+        printf("   full scale reads %u mV of pack\n", (unsigned)top_mv);
+        check("full scale covers a charged pack with margin",
+              top_mv > 13000U);
+        check("the scale is close to the nominal divider",
+              BATT_UV_PER_COUNT > 3800U && BATT_UV_PER_COUNT < 4300U);
     }
+
+    // --- the calibration reproduces the bench measurement ---
+    {
+        // firmware read 11035 mV before calibration, meter said 10960
+        uint32_t counts = 2739U;
+        uint32_t mv = (counts * BATT_UV_PER_COUNT) / 1000U;
+        printf("   %u counts -> %u mV, meter measured 10960\n",
+               (unsigned)counts, (unsigned)mv);
+        check("calibrated scale matches the meter within 20 mV",
+              mv > 10940U && mv < 10980U);
+    }
+
+    // --- arithmetic cannot overflow ---
+    check("full scale conversion fits in 32 bits",
+          (uint64_t)4095U * BATT_UV_PER_COUNT < 4294967295ULL);
 
     printf("\n%s (%d failure%s)\n\n",
            fails ? "SOME TESTS FAILED" : "ALL TESTS PASSED",

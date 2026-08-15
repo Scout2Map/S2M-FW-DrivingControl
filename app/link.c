@@ -154,6 +154,8 @@ static void handle_command(uint8_t type, const uint8_t *payload, uint8_t len)
         d.imu_read_fail  = bno055_read_fail();
         d.i2c_errors     = (uint16_t)i2c_error_count();
         d.i2c_recoveries = (uint16_t)i2c_recovery_count();
+        d.batt_counts    = batt_get_counts();
+        d.batt_mv        = batt_get_mv();
         send_frame(MSG_DIAG, &d, sizeof d);
         break;
     }

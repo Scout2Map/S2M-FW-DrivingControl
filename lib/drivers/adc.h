@@ -32,6 +32,9 @@ uint16_t     dist_get_mm(void);
 uint8_t      dist_is_too_close(void);
 
 uint16_t     batt_get_mv(void);     // pack voltage, filtered
+// Raw ADC counts behind the last battery sample. Only used to
+// recalibrate BATT_UV_PER_COUNT against a meter.
+uint16_t     batt_get_counts(void);
 batt_state_t batt_get_state(void);
 
 #endif

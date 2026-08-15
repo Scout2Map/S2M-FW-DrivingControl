@@ -13,6 +13,7 @@ Usage
     ./s2m_console.py --step 150         step response capture for PID work
     ./s2m_console.py --imu              add heading and yaw rate columns
     ./s2m_console.py --diag             IMU and I2C bring-up diagnostics
+    ./s2m_console.py --calib-batt       recalibrate the battery scale
     ./s2m_console.py --scan             list every device on the I2C bus
     ./s2m_console.py --estop            latch an emergency stop
 
@@ -24,8 +25,8 @@ kept adjacent to the field names rather than inlined.
 import argparse
 import math
 import struct
-import sys
 import time
+import sys
 
 try:
     import serial
@@ -64,7 +65,7 @@ STATUS_BITS = [
 
 TELEMETRY_FMT = "<IiihhiiihhhhhhhhHHhhHBB"
 BOOT_INFO_FMT = "<BBBBHH"
-DIAG_FMT      = "<BBBBIIHH"
+DIAG_FMT      = "<BBBBIIHHHH"
 
 # Addresses worth naming when they turn up on this robot's bus
 KNOWN_I2C = {
@@ -166,6 +167,64 @@ def status_text(s: int) -> str:
     return "|".join(names) if names else "-"
 
 
+def calibrate_battery(ser):
+    """Derives BATT_UV_PER_COUNT from one meter reading.
+
+    Works from raw counts rather than the reported voltage, so the
+    constant being replaced does not influence its own replacement.
+    A resistive divider has no offset worth modelling, so a single
+    point is enough."""
+    print()
+    print("  battery calibration")
+    print("  " + "-" * 52)
+    print("  Measure the pack with a multimeter at the same moment.")
+    print()
+
+    ser.reset_input_buffer()
+    ser.write(encode(MSG_CMD_DIAG))
+
+    dec = Decoder()
+    counts = reported = None
+    t0 = time.time()
+    while time.time() - t0 < 3.0 and counts is None:
+        for mtype, payload in dec.feed(ser.read(256)):
+            if mtype == MSG_DIAG:
+                d = struct.unpack(DIAG_FMT, payload)
+                counts, reported = d[8], d[9]
+
+    if counts is None:
+        print("  no diagnostics frame received")
+        return
+    if counts == 0:
+        print("  the battery channel has not been sampled yet.")
+        print("  is the pack connected?")
+        return
+
+    print(f"  firmware reads {reported/1000:.3f} V from {counts} counts")
+    try:
+        actual = float(input("  multimeter reading in volts: ").strip())
+    except ValueError:
+        print("  not a number, aborting")
+        return
+
+    if actual < 6.0 or actual > 14.0:
+        print("  that is outside the range of a 3S pack, aborting")
+        return
+
+    uv = round(actual * 1000.0 * 1000.0 / counts)
+    err = (reported / 1000.0 - actual) / actual * 100.0
+
+    print()
+    print(f"  error before calibration {err:+.2f} percent")
+    print(f"  put this in config/board_config.h:")
+    print(f"    #define BATT_UV_PER_COUNT       {uv}U")
+    if abs(err) > 5.0:
+        print()
+        print("  that is a large correction. Check the divider resistors")
+        print("  are the values you think they are before trusting it.")
+    print()
+
+
 def open_port(dev: str) -> serial.Serial:
     return serial.Serial(dev, 115200, timeout=0.05)
 
@@ -250,6 +309,8 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                       f"{(cal>>2)&3}/{cal&3}")
                 print(f"       reads ok/fail  : {d[4]} / {d[5]}")
                 print(f"       i2c err/recover: {d[6]} / {d[7]}")
+                print(f"       battery        : {d[9]/1000:.3f} V "
+                      f"({d[8]} counts)")
             elif mtype == MSG_TELEMETRY:
                 t = parse_telemetry(payload)
                 if csv:
@@ -321,6 +382,8 @@ def main():
                     help="dump IMU and I2C bring-up diagnostics")
     ap.add_argument("--scan", action="store_true",
                     help="probe every address on the I2C bus")
+    ap.add_argument("--calib-batt", action="store_true",
+                    help="derive BATT_UV_PER_COUNT from a meter reading")
     ap.add_argument("--csv", action="store_true")
     ap.add_argument("--imu", action="store_true",
                     help="show heading and yaw rate from the BNO055")
@@ -344,6 +407,8 @@ def main():
         elif args.ping:
             ser.write(encode(MSG_CMD_PING))
             run_monitor(ser, duration=1.0)
+        elif args.calib_batt:
+            calibrate_battery(ser)
         elif args.diag:
             ser.write(encode(MSG_CMD_DIAG))
             run_monitor(ser, duration=1.5)
