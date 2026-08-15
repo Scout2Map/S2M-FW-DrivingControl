@@ -25,6 +25,7 @@
 #include "led.h"
 #include "drive.h"
 #include "link.h"
+#include "bno055.h"
 #include "calib.h"
 
 // ============================================================
@@ -63,6 +64,10 @@ int main(void)
     calib_run();
 #endif
 
+    // Starts the boot wait, the device needs ~700ms before it answers.
+    // Init continues in the background from bno055_poll().
+    bno055_init();
+
     drive_init(board_io_get());
 
     // USB comes up before the watchdog starts. Enumeration involves a
@@ -93,7 +98,7 @@ int main(void)
 
         if ((now - t_imu) >= IMU_PERIOD_MS) {
             t_imu = now;
-            // imu_poll();  non blocking state machine, added next
+            bno055_poll();
         }
 
         if ((now - t_adc) >= ADC_PERIOD_MS) {

@@ -27,6 +27,7 @@
 #include "drive.h"
 #include "motor.h"
 #include "encoder.h"
+#include "bno055.h"
 #include "systick.h"
 
 // Firmware version reported in MSG_BOOT_INFO
@@ -40,22 +41,6 @@ static uint8_t         s_boot_sent;
 static uint8_t         s_estop_latched;
 static uint32_t        s_frames_tx;
 static uint32_t        s_frames_dropped;
-
-// Supplied by the BNO055 driver once it lands. Weak stubs keep the link
-// layer buildable and let telemetry carry zeros in the meantime.
-int16_t imu_get_quat_w(void) __attribute__((weak));
-int16_t imu_get_quat_x(void) __attribute__((weak));
-int16_t imu_get_quat_y(void) __attribute__((weak));
-int16_t imu_get_quat_z(void) __attribute__((weak));
-int16_t imu_get_gyro_z(void) __attribute__((weak));
-uint8_t imu_is_ok(void)      __attribute__((weak));
-
-int16_t imu_get_quat_w(void) { return 0; }
-int16_t imu_get_quat_x(void) { return 0; }
-int16_t imu_get_quat_y(void) { return 0; }
-int16_t imu_get_quat_z(void) { return 0; }
-int16_t imu_get_gyro_z(void) { return 0; }
-uint8_t imu_is_ok(void)      { return 0; }
 
 // Supplied by the IR distance driver. 0xFFFF means no valid reading.
 uint16_t dist_get_mm(void) __attribute__((weak));
@@ -202,11 +187,12 @@ void link_send_telemetry(void)
     t.odom_y_mm       = (int32_t)(y * 1000.0f);
     t.odom_theta_mrad = (int32_t)(th * 1000.0f);
 
-    t.quat_w = imu_get_quat_w();
-    t.quat_x = imu_get_quat_x();
-    t.quat_y = imu_get_quat_y();
-    t.quat_z = imu_get_quat_z();
-    t.gyro_z = imu_get_gyro_z();
+    // Forwarded at the device native scaling, the SBC converts
+    t.quat_w = bno055_quat_w();
+    t.quat_x = bno055_quat_x();
+    t.quat_y = bno055_quat_y();
+    t.quat_z = bno055_quat_z();
+    t.gyro_z = bno055_gyro_z();
 
     t.distance_mm = dist_get_mm();
     t.battery_mv  = batt_get_mv();
@@ -220,7 +206,10 @@ void link_send_telemetry(void)
     if (motor_get_fault())    st |= STATUS_FAULT_STALL;
     if (drive_cmd_expired())  st |= STATUS_CMD_TIMEOUT;
     if (s_estop_latched)      st |= STATUS_ESTOP_LATCHED;
-    if (imu_is_ok())          st |= STATUS_IMU_OK;
+    if (bno055_is_ok())       st |= STATUS_IMU_OK;
+    // Bits 7:6 of the calibration byte are the system field; 3 means the
+    // fusion result is trustworthy in absolute terms
+    if ((bno055_calib() >> 6) == 3U) st |= STATUS_IMU_CALIBRATED;
     t.status = st;
 
     send_frame(MSG_TELEMETRY, &t, sizeof t);

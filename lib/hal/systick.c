@@ -46,6 +46,26 @@ uint32_t systick_millis(void)
 // Blocking delay. Refreshes the watchdog so callers do not have to
 // reason about whether their delay outlasts IWDG_TIMEOUT_MS.
 // Writing the key register is harmless when the IWDG is not running.
+// Microsecond busy wait derived from the SysTick counter. Only used by
+// the I2C bus recovery routine, which has to bit bang SCL at a defined
+// rate before the peripheral is running.
+void systick_delay_us(uint32_t us)
+{
+    // SysTick counts down from LOAD once per millisecond
+    uint32_t ticks_per_us = SYSCLK_FREQ_HZ / 1000000U;
+    uint32_t total  = us * ticks_per_us;
+    uint32_t start  = SysTick->VAL;
+    uint32_t reload = SysTick->LOAD + 1U;
+    uint32_t elapsed = 0;
+
+    while (elapsed < total) {
+        uint32_t now = SysTick->VAL;
+        // The counter decrements, so a larger value means it wrapped
+        elapsed += (now <= start) ? (start - now) : (start + reload - now);
+        start = now;
+    }
+}
+
 void systick_delay_ms(uint32_t ms)
 {
     uint32_t start = s_millis;

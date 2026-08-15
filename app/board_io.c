@@ -20,6 +20,7 @@
 #include "motor.h"
 #include "encoder.h"
 #include "systick.h"
+#include "bno055.h"
 
 // ============================================================
 // Adapter between the hardware independent control layer and the
@@ -29,14 +30,6 @@
 // Swapping a motor driver or an encoder scheme means editing this
 // file only, the control layer never notices.
 // ============================================================
-
-// Supplied by the BNO055 driver once it lands
-// The weak stub keeps the build green until then
-float imu_get_yaw(void) __attribute__((weak));
-float imu_get_yaw(void)
-{
-    return 0.0f;
-}
 
 static void io_set_duty(int idx, int16_t permille)
 {
@@ -77,7 +70,7 @@ static int32_t io_get_delta_counts(int idx)
 
 static float io_get_yaw(void)
 {
-    return imu_get_yaw();
+    return bno055_yaw_rad();
 }
 
 static uint32_t io_millis(void)

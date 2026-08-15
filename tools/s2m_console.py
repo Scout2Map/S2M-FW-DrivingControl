@@ -11,6 +11,7 @@ Usage
     ./s2m_console.py --raw 300 300      spin both wheels at 30 percent
     ./s2m_console.py --vel 100 0        drive at 100 mm/s straight
     ./s2m_console.py --step 150         step response capture for PID work
+    ./s2m_console.py --imu              add heading and yaw rate columns
     ./s2m_console.py --estop            latch an emergency stop
 
 Note: the frame layout here mirrors lib/control/protocol.h. Change one
@@ -19,6 +20,7 @@ kept adjacent to the field names rather than inlined.
 """
 
 import argparse
+import math
 import struct
 import sys
 import time
@@ -50,6 +52,7 @@ STATUS_BITS = [
     (1 << 5, "IMU_OK"),
     (1 << 6, "BATT_WARN"),
     (1 << 7, "BATT_CRIT"),
+    (1 << 8, "IMU_CAL"),
 ]
 
 TELEMETRY_FMT = "<IiihhiiihhhhhHHhhH"
@@ -142,7 +145,18 @@ def cmd_raw(left: int, right: int) -> bytes:
     return encode(MSG_CMD_WHEEL_RAW, struct.pack("<hh", left, right))
 
 
-def run_monitor(ser, sender=None, duration=None, csv=False):
+def quat_to_yaw_deg(t: dict) -> float:
+    """Heading from the BNO055 quaternion, which arrives at 1/16384."""
+    s = 1.0 / 16384.0
+    w, x, y, z = t["qw"]*s, t["qx"]*s, t["qy"]*s, t["qz"]*s
+    if w == 0 and x == 0 and y == 0 and z == 0:
+        return 0.0
+    siny = 2.0*(w*z + x*y)
+    cosy = 1.0 - 2.0*(y*y + z*z)
+    return math.degrees(math.atan2(siny, cosy))
+
+
+def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
     """Streams telemetry. sender is called every 100ms to republish a
     command, which the firmware requires or its timeout trips."""
     dec = Decoder()
@@ -175,13 +189,18 @@ def run_monitor(ser, sender=None, duration=None, csv=False):
                         printed_header = True
                     print(",".join(str(v) for v in t.values()))
                 else:
-                    print(f"t={t['t_ms']:>8}  "
-                          f"enc L{t['enc_l']:>9} R{t['enc_r']:>9}  "
-                          f"spd L{t['spd_l']:>5} R{t['spd_r']:>5} mm/s  "
-                          f"duty L{t['duty_l']:>5} R{t['duty_r']:>5}  "
-                          f"odom {t['x_mm']:>6},{t['y_mm']:>6} "
-                          f"{t['th_mrad']:>6}mrad  "
-                          f"[{status_text(t['status'])}]")
+                    line = (f"t={t['t_ms']:>8}  "
+                            f"enc L{t['enc_l']:>9} R{t['enc_r']:>9}  "
+                            f"spd L{t['spd_l']:>5} R{t['spd_r']:>5} mm/s  "
+                            f"duty L{t['duty_l']:>5} R{t['duty_r']:>5}  "
+                            f"odom {t['x_mm']:>6},{t['y_mm']:>6} "
+                            f"{t['th_mrad']:>6}mrad")
+                    if show_imu:
+                        yaw = quat_to_yaw_deg(t)
+                        line += (f"  yaw {yaw:>7.1f}deg"
+                                 f"  gz {t['gyro_z']/16.0:>7.1f}deg/s")
+                    line += f"  [{status_text(t['status'])}]"
+                    print(line)
 
     if dec.crc_err:
         print(f"\n{dec.ok} frames ok, {dec.crc_err} CRC errors", file=sys.stderr)
@@ -228,6 +247,8 @@ def main():
     ap.add_argument("--reset-odom", action="store_true")
     ap.add_argument("--ping", action="store_true")
     ap.add_argument("--csv", action="store_true")
+    ap.add_argument("--imu", action="store_true",
+                    help="show heading and yaw rate from the BNO055")
     args = ap.parse_args()
 
     try:
@@ -253,15 +274,17 @@ def main():
         elif args.raw:
             l, r = args.raw
             run_monitor(ser, sender=lambda: cmd_raw(l, r),
-                        duration=args.seconds, csv=args.csv)
+                        duration=args.seconds, csv=args.csv,
+                        show_imu=args.imu)
             ser.write(cmd_raw(0, 0))
         elif args.vel:
             v, w = args.vel
             run_monitor(ser, sender=lambda: cmd_velocity(v, w),
-                        duration=args.seconds, csv=args.csv)
+                        duration=args.seconds, csv=args.csv,
+                        show_imu=args.imu)
             ser.write(cmd_velocity(0, 0))
         else:
-            run_monitor(ser, csv=args.csv)
+            run_monitor(ser, csv=args.csv, show_imu=args.imu)
     except KeyboardInterrupt:
         # Always leave the robot stopped, whatever happened
         ser.write(cmd_velocity(0, 0))

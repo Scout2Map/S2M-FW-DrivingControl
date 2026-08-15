@@ -60,6 +60,10 @@
 #define STATUS_IMU_OK           (1U << 5)
 #define STATUS_BATT_WARN        (1U << 6)
 #define STATUS_BATT_CRITICAL    (1U << 7)
+// Set once the BNO055 reports its fusion subsystem fully calibrated.
+// Orientation before that point is usable for relative motion but the
+// absolute heading may drift, so the SBC should weight it accordingly.
+#define STATUS_IMU_CALIBRATED   (1U << 8)
 
 // ============================================================
 // Payload layouts
