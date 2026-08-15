@@ -201,20 +201,29 @@
 // 10% duty correction. Full duty corresponds to MAX_WHEEL_SPEED_MPS,
 // so KP is on the order of DUTY_MAX / MAX_WHEEL_SPEED_MPS.
 //
-// Confirmed on the ground 2026-08-14: 2.0% steady error at 150 mm/s,
-// 5.3% overshoot, left and right matched to 0.4 mm/s. The residual
-// error is under two measurement quanta, so tuning past this point
+// FINAL, verified on the ground 2026-08-14 at a 150 mm/s step:
+//   steady error   0.3 percent, below one measurement quantum
+//   2 percent band reached at 760ms
+//   overshoot      5.3 percent
+//   left/right     matched to under 0.1 mm/s
+//
+// KI went 3000 -> 4500 after a ground run that only reached the 2 percent
+// band at 2.2s. That change cut settling to 760ms with no change in
+// overshoot, confirming the integral term shapes the slow tail while the
+// transient belongs to KP.
+//
+// KP was left alone on purpose. The overshoot comes from the
+// proportional term acting on a large error while the output is
+// saturated, so raising KP would worsen it.
+//
+// Do not tune further without changing the measurement. The residual
+// error is smaller than the speed quantum, so any apparent improvement
 // would be fitting to sensor resolution rather than to the plant.
 //
-// KI was raised from 3000 after the ground run, which reached the 2%
-// band only at 2.2s. KP was left alone deliberately: the overshoot
-// comes from the proportional term acting on a large error while the
-// output is saturated, so raising KP would make it worse, whereas KI
-// mostly shapes the slow tail.
-//
-// Retune on the ground, never on a stand. Unloaded, the feedforward
-// runs about 12% high and the integrator spends seconds cancelling it,
-// which looks like a tuning fault but is only the absence of load.
+// Always tune on the ground, never on a stand. Unloaded, the
+// feedforward runs about 12 percent high and the integrator spends
+// seconds cancelling it, which looks like a tuning fault but is only
+// the absence of load.
 #define PID_KP                  3000.0f
 #define PID_KI                  4500.0f
 #define PID_USE_D               0        // preprocessor cannot compare floats
