@@ -137,6 +137,17 @@ static void handle_command(uint8_t type, const uint8_t *payload, uint8_t len)
         send_frame(MSG_PONG, 0, 0);
         break;
 
+    case MSG_CMD_I2C_SCAN: {
+        // Blocking, but only ever triggered by hand during bring-up.
+        // The drive loop pauses for a few milliseconds, which is why
+        // the motors are stopped first.
+        drive_stop();
+        i2c_scan_t sc;
+        sc.count = i2c_scan(sc.bitmap);
+        send_frame(MSG_I2C_SCAN, &sc, sizeof sc);
+        break;
+    }
+
     case MSG_CMD_DIAG: {
         diag_t d;
         d.imu_init_step  = bno055_init_step();

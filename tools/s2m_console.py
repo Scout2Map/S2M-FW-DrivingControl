@@ -13,6 +13,7 @@ Usage
     ./s2m_console.py --step 150         step response capture for PID work
     ./s2m_console.py --imu              add heading and yaw rate columns
     ./s2m_console.py --diag             IMU and I2C bring-up diagnostics
+    ./s2m_console.py --scan             list every device on the I2C bus
     ./s2m_console.py --estop            latch an emergency stop
 
 Note: the frame layout here mirrors lib/control/protocol.h. Change one
@@ -41,10 +42,12 @@ MSG_CMD_RESET_ODOM  = 0x04
 MSG_CMD_CLEAR_FAULT = 0x05
 MSG_CMD_PING        = 0x06
 MSG_CMD_DIAG        = 0x07
+MSG_CMD_I2C_SCAN    = 0x08
 MSG_TELEMETRY       = 0x81
 MSG_PONG            = 0x86
 MSG_BOOT_INFO       = 0x87
 MSG_DIAG            = 0x88
+MSG_I2C_SCAN        = 0x89
 
 STATUS_BITS = [
     (1 << 0, "ENABLED"),
@@ -61,6 +64,19 @@ STATUS_BITS = [
 TELEMETRY_FMT = "<IiihhiiihhhhhHHhhH"
 BOOT_INFO_FMT = "<BBBBHH"
 DIAG_FMT      = "<BBBBIIHH"
+
+# Addresses worth naming when they turn up on this robot's bus
+KNOWN_I2C = {
+    0x28: "BNO055 (default)",
+    0x29: "BNO055 (ADR high)",
+    0x23: "BH1750",
+    0x38: "AHT21",
+    0x53: "ENS160",
+    0x5C: "BH1750 (alt)",
+    0x68: "MPU6050 / DS3231",
+    0x76: "BMP280",
+    0x77: "BMP280 (alt)",
+}
 
 
 def crc16(data: bytes) -> int:
@@ -84,7 +100,7 @@ class Decoder:
     KNOWN = {MSG_CMD_VELOCITY, MSG_CMD_WHEEL_RAW, MSG_CMD_ESTOP,
              MSG_CMD_RESET_ODOM, MSG_CMD_CLEAR_FAULT, MSG_CMD_PING,
              MSG_TELEMETRY, MSG_PONG, MSG_BOOT_INFO, MSG_CMD_DIAG,
-             MSG_DIAG}
+             MSG_DIAG, MSG_CMD_I2C_SCAN, MSG_I2C_SCAN}
 
     def __init__(self):
         self.buf = bytearray()
@@ -186,6 +202,19 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                       f"{v[4]} counts/rev  {v[5]} mm base")
             elif mtype == MSG_PONG:
                 print("[pong]")
+            elif mtype == MSG_I2C_SCAN:
+                count = payload[0]
+                bits = payload[1:17]
+                found = [a for a in range(128)
+                         if bits[a >> 3] & (1 << (a & 7))]
+                print(f"[i2c scan] {count} device(s) responded")
+                if not found:
+                    print("  nothing on the bus. Check power, wiring and pull ups.")
+                for a in found:
+                    name = KNOWN_I2C.get(a, "")
+                    print(f"  0x{a:02X}" + (f"  {name}" if name else ""))
+                if 0x29 in found and 0x28 not in found:
+                    print("  -> set BNO055_ADDR to 0x29 in board_config.h")
             elif mtype == MSG_DIAG:
                 d = struct.unpack(DIAG_FMT, payload)
                 steps = ["WAIT_BOOT", "READ_ID", "CHECK_ID", "SET_CONFIG",
@@ -268,6 +297,8 @@ def main():
     ap.add_argument("--ping", action="store_true")
     ap.add_argument("--diag", action="store_true",
                     help="dump IMU and I2C bring-up diagnostics")
+    ap.add_argument("--scan", action="store_true",
+                    help="probe every address on the I2C bus")
     ap.add_argument("--csv", action="store_true")
     ap.add_argument("--imu", action="store_true",
                     help="show heading and yaw rate from the BNO055")
@@ -294,6 +325,9 @@ def main():
         elif args.diag:
             ser.write(encode(MSG_CMD_DIAG))
             run_monitor(ser, duration=1.5)
+        elif args.scan:
+            ser.write(encode(MSG_CMD_I2C_SCAN))
+            run_monitor(ser, duration=2.0)
         elif args.step is not None:
             run_step(ser, args.step, args.seconds)
         elif args.raw:

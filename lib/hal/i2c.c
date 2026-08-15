@@ -308,3 +308,95 @@ i2c_result_t i2c_poll(void)
 
 uint32_t i2c_error_count(void)    { return s_errors; }
 uint32_t i2c_recovery_count(void) { return s_recoveries; }
+
+// ============================================================
+// Bus scan
+//
+// Probes every 7 bit address by sending the address byte and watching
+// for an ACK. Blocking on purpose: it is a bring-up tool, not part of
+// the control path, and a scan of 112 addresses at 100kHz takes only a
+// few milliseconds.
+//
+// Note: probing with a write bit is the safe direction. A read probe
+// would make some devices start streaming data, which then has to be
+// clocked out before the bus returns to idle.
+// ============================================================
+
+uint8_t i2c_probe(uint8_t addr)
+{
+    uint32_t guard;
+
+    // Wait for the bus to be free, but never forever
+    guard = 0;
+    while (I2C_BUS->SR2 & I2C_SR2_BUSY) {
+        IWDG->KR = IWDG_REFRESH_KEY;
+        if (++guard > 100000U) {
+            i2c_bus_recover();
+            return 0;
+        }
+    }
+
+    I2C_BUS->CR1 |= I2C_CR1_START;
+
+    guard = 0;
+    while (!(I2C_BUS->SR1 & I2C_SR1_SB)) {
+        if (++guard > 100000U) {
+            I2C_BUS->CR1 |= I2C_CR1_STOP;
+            return 0;
+        }
+    }
+
+    I2C_BUS->DR = (uint8_t)(addr << 1);     // write direction
+
+    // Either ADDR (acked) or AF (nacked) will come up
+    guard = 0;
+    uint8_t found = 0;
+    while (1) {
+        uint32_t sr1 = I2C_BUS->SR1;
+        if (sr1 & I2C_SR1_ADDR) {
+            (void)I2C_BUS->SR2;             // clearing sequence
+            found = 1;
+            break;
+        }
+        if (sr1 & I2C_SR1_AF) {
+            I2C_BUS->SR1 &= ~I2C_SR1_AF;
+            break;
+        }
+        if (++guard > 100000U) {
+            break;
+        }
+    }
+
+    I2C_BUS->CR1 |= I2C_CR1_STOP;
+
+    // Let the STOP finish before the next probe starts
+    guard = 0;
+    while ((I2C_BUS->CR1 & I2C_CR1_STOP) && ++guard < 100000U) { }
+
+    return found;
+}
+
+// Fills a bitmap of responding addresses, one bit per address 0..127.
+// Returns how many devices answered.
+uint8_t i2c_scan(uint8_t *bitmap16)
+{
+    uint8_t count = 0;
+
+    for (int i = 0; i < 16; i++) {
+        bitmap16[i] = 0;
+    }
+
+    // 0x00 to 0x07 and 0x78 to 0x7F are reserved by the specification
+    for (uint8_t a = 0x08; a <= 0x77; a++) {
+        // A clean scan takes about 12ms, but a wedged bus can stretch
+        // each probe out to its guard limit. Feeding the watchdog here
+        // keeps a diagnostic from turning into a reset loop.
+        IWDG->KR = IWDG_REFRESH_KEY;
+
+        if (i2c_probe(a)) {
+            bitmap16[a >> 3] |= (uint8_t)(1U << (a & 7U));
+            count++;
+        }
+    }
+    return count;
+}
