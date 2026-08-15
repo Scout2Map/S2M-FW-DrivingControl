@@ -9,8 +9,9 @@
  * motor driver or the encoder scheme means editing board_io.c alone,
  * the control layer never notices the change.
  *
- * Note: imu_get_yaw() is a weak stub returning 0.0 until the BNO055
- * driver lands. Heading assist is inert but harmless until then.
+ * Note: heading assist only runs on the open loop fallback path. With
+ * encoders present the velocity loop does not consult the IMU, so a
+ * yaw fault degrades slip detection rather than steering.
  */
 
 #include <stddef.h>
