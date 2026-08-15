@@ -110,7 +110,8 @@ scout2map-fw-drive/
 │       ├── protocol.c    # CRC16
 │       └── framing.c/.h  # 프레임 인코더 / 디코더
 ├── tools/
-│   └── s2m_console.py    # 호스트 측 검증 콘솔
+│   ├── s2m_console.py    # 호스트 측 검증 콘솔
+│   └── s2m_imu_view.py   # IMU 시각화 및 바이어스 측정
 └── test/                 # 호스트 PC 단위 테스트
     ├── Makefile
     ├── test_drive.c
@@ -603,6 +604,59 @@ SCL/SDA 교차 연결, 주소, 납땜 순으로 확인한다.
 따라 변하고, 회전 중에만 `gz`가 0이 아닌 값을 보이면 정상이다.
 
 상태 필드에 `IMU_OK`가 표시되지 않으면 배선 또는 주소를 확인한다.
+
+### 시각화 도구
+
+```
+./tools/s2m_imu_view.py
+```
+
+방위, 자세, 캘리브레이션 진행 상황을 터미널에 실시간 표시한다.
+캘리브레이션 바가 차오르는 것을 보면서 차체를 움직이면 되므로,
+숫자만 보는 것보다 진행 상황 파악이 빠르다.
+
+```
+  heading      -0.30 deg
+  S      SW     W       NW     N      NE      E      SE
+                                ^
+
+  roll    2.10      pitch   -1.40
+               |
+     ----------O----------
+               |
+
+  calibration        0 = none, 3 = full
+    system   [############]  3
+    gyro     [############]  3
+    accel    [########....]  2
+    magneto  [####........]  1
+
+  yaw rate     -1.50 deg/s
+  recent    min   -1.70  max   -1.20  spread   0.50
+```
+
+캘리브레이션이 완료되지 않은 항목에 대한 조치 방법을 하단에 표시한다.
+
+### 자이로 바이어스 측정
+
+```
+./tools/s2m_imu_view.py --bias
+```
+
+정지 상태에서 10초간 요레이트를 평균하여 영점 오프셋을 측정한다.
+BNO055는 캘리브레이션 이전에 정지 상태에서도 1~2 deg/s의 값을 출력하며,
+이를 보정하지 않으면 슬립 검출이 회전으로 오판할 수 있다.
+
+```
+  bias      -1.487 deg/s
+  noise sd   0.213 deg/s
+  drift     -89.2 deg per minute if uncorrected
+```
+
+자이로 캘리브레이션(정지 유지)을 완료하면 이 값은 0.1 deg/s 이하로
+떨어진다. 그 이상이 지속되면 슬립 검출 로직에서 보정값으로 사용한다.
+
+기록이 필요한 경우 `--log imu.csv`로 CSV 저장이 가능하다.
 
 ## 제어 구조
 

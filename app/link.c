@@ -239,7 +239,9 @@ void link_send_telemetry(void)
     // Bits 7:6 of the calibration byte are the system field; 3 means the
     // fusion result is trustworthy in absolute terms
     if ((bno055_calib() >> 6) == 3U) st |= STATUS_IMU_CALIBRATED;
-    t.status = st;
+    t.status    = st;
+    t.imu_calib = bno055_calib();
+    t.reserved  = 0;
 
     send_frame(MSG_TELEMETRY, &t, sizeof t);
 }

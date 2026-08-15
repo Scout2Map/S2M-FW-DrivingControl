@@ -120,6 +120,11 @@ typedef struct __attribute__((packed)) {
     int16_t  duty_left;         // applied duty, for stall diagnosis
     int16_t  duty_right;
     uint16_t status;            // STATUS_* bitfield
+    // Packed BNO055 calibration: bits 7:6 sys, 5:4 gyr, 3:2 acc, 1:0 mag.
+    // Carried in every frame rather than only in DIAG so an operator can
+    // watch calibration progress while moving the chassis.
+    uint8_t  imu_calib;
+    uint8_t  reserved;          // keeps the struct 4 byte aligned
 } telemetry_t;
 
 // MSG_DIAG, 16 bytes
