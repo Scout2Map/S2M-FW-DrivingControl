@@ -141,6 +141,7 @@ typedef struct __attribute__((packed)) {
 // of how many devices answer.
 typedef struct __attribute__((packed)) {
     uint8_t count;              // devices that acknowledged
+    uint8_t lines;              // bit0 SCL idle high, bit1 SDA idle high
     uint8_t bitmap[16];         // one bit per 7 bit address, LSB first
 } i2c_scan_t;
 

@@ -204,12 +204,20 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                 print("[pong]")
             elif mtype == MSG_I2C_SCAN:
                 count = payload[0]
-                bits = payload[1:17]
+                lines = payload[1]
+                bits = payload[2:18]
                 found = [a for a in range(128)
                          if bits[a >> 3] & (1 << (a & 7))]
                 print(f"[i2c scan] {count} device(s) responded")
-                if not found:
-                    print("  nothing on the bus. Check power, wiring and pull ups.")
+                if lines != 0x03:
+                    print("  BUS LINES NOT IDLE HIGH -- no scan is possible.")
+                    print("  A line held low means one of:")
+                    print("    - no pull up resistors on SCL/SDA")
+                    print("    - the sensor board has no power")
+                    print("    - SCL or SDA shorted to ground")
+                elif not found:
+                    print("  lines are healthy but nothing answered.")
+                    print("  Check the sensor is powered and shares a ground.")
                 for a in found:
                     name = KNOWN_I2C.get(a, "")
                     print(f"  0x{a:02X}" + (f"  {name}" if name else ""))

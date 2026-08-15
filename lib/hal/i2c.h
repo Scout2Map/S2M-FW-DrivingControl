@@ -29,6 +29,8 @@ uint8_t      i2c_bus_recover(void);
 
 // Bring-up helpers. Blocking, and not for use on the control path.
 uint8_t      i2c_probe(uint8_t addr);
+// Both lines idle high. False means no pull up, no sensor power, or a short.
+uint8_t      i2c_lines_idle(void);
 uint8_t      i2c_scan(uint8_t *bitmap16);   // 16 bytes, one bit per address
 
 uint32_t     i2c_error_count(void);

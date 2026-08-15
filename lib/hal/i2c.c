@@ -322,6 +322,24 @@ uint32_t i2c_recovery_count(void) { return s_recoveries; }
 // clocked out before the bus returns to idle.
 // ============================================================
 
+// Guard sized against the actual bus, not an arbitrary large number.
+// One address byte at 100kHz takes about 110us; 20000 iterations of a
+// register poll is roughly 1.4ms at 72MHz, which is ample headroom.
+//
+// The original 100000 was catastrophic here: with nothing on the bus
+// every probe ran all three guards to completion, so a full scan took
+// 2.3 seconds. The main loop stalled long enough to break USB and the
+// watchdog fired mid scan, which looked like the console silently
+// returning nothing at all.
+#define PROBE_GUARD     20000U
+
+static void probe_wait_tick(void)
+{
+    // Fed on every guard iteration, not just the outer loop. A scan of
+    // an empty bus spends all its time inside these waits.
+    IWDG->KR = IWDG_REFRESH_KEY;
+}
+
 uint8_t i2c_probe(uint8_t addr)
 {
     uint32_t guard;
@@ -329,9 +347,10 @@ uint8_t i2c_probe(uint8_t addr)
     // Wait for the bus to be free, but never forever
     guard = 0;
     while (I2C_BUS->SR2 & I2C_SR2_BUSY) {
-        IWDG->KR = IWDG_REFRESH_KEY;
-        if (++guard > 100000U) {
+        probe_wait_tick();
+        if (++guard > PROBE_GUARD) {
             i2c_bus_recover();
+            s_errors++;
             return 0;
         }
     }
@@ -340,8 +359,10 @@ uint8_t i2c_probe(uint8_t addr)
 
     guard = 0;
     while (!(I2C_BUS->SR1 & I2C_SR1_SB)) {
-        if (++guard > 100000U) {
+        probe_wait_tick();
+        if (++guard > PROBE_GUARD) {
             I2C_BUS->CR1 |= I2C_CR1_STOP;
+            s_errors++;             // distinguishes a dead bus from a NACK
             return 0;
         }
     }
@@ -362,7 +383,9 @@ uint8_t i2c_probe(uint8_t addr)
             I2C_BUS->SR1 &= ~I2C_SR1_AF;
             break;
         }
-        if (++guard > 100000U) {
+        probe_wait_tick();
+        if (++guard > PROBE_GUARD) {
+            s_errors++;
             break;
         }
     }
@@ -371,16 +394,28 @@ uint8_t i2c_probe(uint8_t addr)
 
     // Let the STOP finish before the next probe starts
     guard = 0;
-    while ((I2C_BUS->CR1 & I2C_CR1_STOP) && ++guard < 100000U) { }
+    while ((I2C_BUS->CR1 & I2C_CR1_STOP) && ++guard < PROBE_GUARD) {
+        probe_wait_tick();
+    }
 
     return found;
 }
 
 // Fills a bitmap of responding addresses, one bit per address 0..127.
 // Returns how many devices answered.
+// Returns 1 if the bus lines are in a state where a scan can succeed.
+// Both must idle high; a line stuck low means no pull up, no power on
+// the sensor board, or a short.
+uint8_t i2c_lines_idle(void)
+{
+    return (uint8_t)((GPIOB->IDR & (1U << IMU_I2C_SCL_PIN)) &&
+                     (GPIOB->IDR & (1U << IMU_I2C_SDA_PIN)));
+}
+
 uint8_t i2c_scan(uint8_t *bitmap16)
 {
     uint8_t count = 0;
+    uint8_t consecutive_timeouts = 0;
 
     for (int i = 0; i < 16; i++) {
         bitmap16[i] = 0;
@@ -388,14 +423,31 @@ uint8_t i2c_scan(uint8_t *bitmap16)
 
     // 0x00 to 0x07 and 0x78 to 0x7F are reserved by the specification
     for (uint8_t a = 0x08; a <= 0x77; a++) {
-        // A clean scan takes about 12ms, but a wedged bus can stretch
-        // each probe out to its guard limit. Feeding the watchdog here
-        // keeps a diagnostic from turning into a reset loop.
         IWDG->KR = IWDG_REFRESH_KEY;
 
+        uint32_t before = s_errors;
         if (i2c_probe(a)) {
             bitmap16[a >> 3] |= (uint8_t)(1U << (a & 7U));
             count++;
+            consecutive_timeouts = 0;
+            continue;
+        }
+
+        // A NACK is a normal negative answer and costs microseconds.
+        // A timeout means the peripheral never even reached the address
+        // phase, which no amount of further probing will change.
+        if (s_errors != before) {
+            consecutive_timeouts++;
+        } else {
+            consecutive_timeouts = 0;
+        }
+
+        // Eight dead probes in a row means the bus is not usable. Going
+        // on would burn a full second and stall USB for long enough to
+        // drop the host connection, which is how this failure first
+        // presented: the console returned nothing at all.
+        if (consecutive_timeouts >= 8U) {
+            break;
         }
     }
     return count;

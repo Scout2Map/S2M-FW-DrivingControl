@@ -658,8 +658,31 @@ BNO055는 지자계 캘리브레이션이 완료되어야 절대 방위가 정�
 0x29만 응답하면 모듈의 ADR 핀이 상승 상태이므로
 `config/board_config.h`의 `BNO055_ADDR`을 0x29로 수정한다.
 
-스캔은 블로킹 동작이며 약 12ms가 소요된다. 실행 전 모터를 정지시키고,
-스캔 루프 내에서 워치독을 갱신하므로 리셋은 발생하지 않는다.
+응답이 없을 때는 버스 라인 상태를 함께 보고한다.
+
+```
+[i2c scan] 0 device(s) responded
+  BUS LINES NOT IDLE HIGH -- no scan is possible.
+  A line held low means one of:
+    - no pull up resistors on SCL/SDA
+    - the sensor board has no power
+    - SCL or SDA shorted to ground
+```
+
+라인이 정상인데 응답이 없으면 센서 전원과 GND 공통 여부를 확인한다.
+
+**스캔 타임아웃 설계.** 초기 구현은 가드 루프를 100000회로 설정하여,
+버스에 아무것도 없을 때 전체 스캔이 2.3초를 소요했다. 이 동안 메인
+루프가 정지하여 USB 연결이 끊기고 워치독이 발동했으며, 결과적으로
+콘솔에 아무 출력도 나타나지 않았다.
+
+현재는 다음과 같이 조정했다.
+
+- 가드 루프를 20000회(약 1.4ms)로 축소
+- 모든 대기 루프 내부에서 워치독 갱신
+- 연속 8회 타임아웃 시 스캔 조기 종료
+
+정상 버스에서는 약 12ms, 완전히 죽은 버스에서도 50ms 이내에 종료된다.
 
 ### 진단
 
