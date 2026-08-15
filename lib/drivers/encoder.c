@@ -42,6 +42,14 @@ typedef struct {
     int32_t      total;      // accumulated counts since boot
     int32_t      delta;      // counts during the last loop
     int8_t       invert;     // mirrored motor mounting
+    // Rolling window used for velocity only. A single 5ms difference
+    // resolves just one count, which is 7.2 mm/s here and coarser than
+    // the steady state error the PID is trying to remove. Summing the
+    // last SPEED_WINDOW loops divides the quantum by that factor while
+    // adding only half a window of phase lag.
+    int32_t      window[SPEED_WINDOW];
+    uint8_t      w_idx;
+    int32_t      w_sum;
 } enc_ch_t;
 
 static enc_ch_t s_enc[ENC_COUNT];
@@ -107,6 +115,11 @@ void encoder_init(void)
         s_enc[i].prev_raw = (uint16_t)s_enc[i].tim->CNT;
         s_enc[i].total    = 0;
         s_enc[i].delta    = 0;
+        s_enc[i].w_idx    = 0;
+        s_enc[i].w_sum    = 0;
+        for (int k = 0; k < SPEED_WINDOW; k++) {
+            s_enc[i].window[k] = 0;
+        }
     }
 }
 
@@ -120,6 +133,13 @@ void encoder_update(void)
         s_enc[i].prev_raw = raw;
         s_enc[i].delta    = (int32_t)d * s_enc[i].invert;
         s_enc[i].total   += s_enc[i].delta;
+
+        // Slide the velocity window. Odometry keeps using delta and
+        // total, which stay exact; only the speed estimate is smoothed.
+        s_enc[i].w_sum -= s_enc[i].window[s_enc[i].w_idx];
+        s_enc[i].window[s_enc[i].w_idx] = s_enc[i].delta;
+        s_enc[i].w_sum += s_enc[i].delta;
+        s_enc[i].w_idx  = (uint8_t)((s_enc[i].w_idx + 1U) % SPEED_WINDOW);
     }
 }
 
@@ -133,14 +153,16 @@ int32_t encoder_get_delta(enc_id_t id)
     return (id < ENC_COUNT) ? s_enc[id].delta : 0;
 }
 
-// Wheel surface speed in m/s from the counts of the last loop
+// Wheel surface speed in m/s, averaged over the rolling window.
+// Resolution is MM_PER_COUNT / (SPEED_WINDOW * LOOP_PERIOD_S), which is
+// SPEED_WINDOW times finer than a single loop difference.
 float encoder_get_speed_mps(enc_id_t id)
 {
     if (id >= ENC_COUNT) {
         return 0.0f;
     }
-    float mm = (float)s_enc[id].delta * MM_PER_COUNT;
-    return (mm * 0.001f) / LOOP_PERIOD_S;
+    float mm = (float)s_enc[id].w_sum * MM_PER_COUNT;
+    return (mm * 0.001f) / (LOOP_PERIOD_S * (float)SPEED_WINDOW);
 }
 
 // Raw counter, used for bench calibration of COUNTS_PER_WHEEL_REV
@@ -156,5 +178,10 @@ void encoder_reset(void)
         s_enc[i].prev_raw = 0;
         s_enc[i].total    = 0;
         s_enc[i].delta    = 0;
+        s_enc[i].w_idx    = 0;
+        s_enc[i].w_sum    = 0;
+        for (int k = 0; k < SPEED_WINDOW; k++) {
+            s_enc[i].window[k] = 0;
+        }
     }
 }

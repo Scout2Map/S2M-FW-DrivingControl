@@ -180,6 +180,14 @@
 #define COUNTS_PER_WHEEL_REV    (ENC_PPR * 4 * GEAR_RATIO)   // 5764
 #define MM_PER_COUNT            (WHEEL_CIRCUM_MM / (float)COUNTS_PER_WHEEL_REV)
 
+// Velocity is measured over a rolling window rather than a single loop.
+// One count per 5ms is 7.2 mm/s here, coarser than the steady state
+// error the PID is asked to remove, so the loop was chasing noise it
+// could not resolve. Four loops divides the quantum to 1.8 mm/s and
+// costs about 10ms of phase lag against a plant tau near 110ms.
+// Odometry is unaffected; it integrates the exact per loop counts.
+#define SPEED_WINDOW            4
+
 // ---- Velocity PID ----
 // Executes in the main loop only, never inside an interrupt handler.
 //
