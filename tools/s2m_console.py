@@ -61,7 +61,7 @@ STATUS_BITS = [
     (1 << 8, "IMU_CAL"),
 ]
 
-TELEMETRY_FMT = "<IiihhiiihhhhhHHhhHBB"
+TELEMETRY_FMT = "<IiihhiiihhhhhhhhHHhhHBB"
 BOOT_INFO_FMT = "<BBBBHH"
 DIAG_FMT      = "<BBBBIIHH"
 
@@ -146,6 +146,7 @@ def parse_telemetry(p: bytes) -> dict:
         "t_ms", "enc_l", "enc_r", "spd_l", "spd_r",
         "x_mm", "y_mm", "th_mrad",
         "qw", "qx", "qy", "qz", "gyro_z",
+        "accel_x", "accel_y", "accel_z",
         "dist_mm", "batt_mv", "duty_l", "duty_r", "status",
         "imu_calib", "reserved"), f))
 

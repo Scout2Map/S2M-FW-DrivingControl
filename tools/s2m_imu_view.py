@@ -9,6 +9,7 @@ Author : jihoonkimtech
 Usage
     ./s2m_imu_view.py                   live view
     ./s2m_imu_view.py --bias            measure the gyro zero offset
+    ./s2m_imu_view.py --axes            work out the mounting orientation
     ./s2m_imu_view.py --log imu.csv     record while viewing
 
 Note: uses plain ANSI escapes rather than curses so the output stays
@@ -42,7 +43,7 @@ MSG_BOOT_INFO = 0x87
 MSG_DIAG      = 0x88
 MSG_I2C_SCAN  = 0x89
 
-TELEMETRY_FMT = "<IiihhiiihhhhhHHhhHBB"
+TELEMETRY_FMT = "<IiihhiiihhhhhhhhHHhhHBB"
 
 KNOWN_TYPES = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
                MSG_TELEMETRY, MSG_PONG, MSG_BOOT_INFO, MSG_DIAG, MSG_I2C_SCAN}
@@ -104,6 +105,7 @@ def parse_telemetry(p: bytes) -> dict:
         "t_ms", "enc_l", "enc_r", "spd_l", "spd_r",
         "x_mm", "y_mm", "th_mrad",
         "qw", "qx", "qy", "qz", "gyro_z",
+        "accel_x", "accel_y", "accel_z",
         "dist_mm", "batt_mv", "duty_l", "duty_r", "status",
         "imu_calib", "reserved"), f))
 
@@ -154,7 +156,10 @@ def tilt_gauge(roll: float, pitch: float, width: int = 21) -> list:
     half = width // 2
     rows = []
     height = 7
-    cx = max(0, min(width - 1, half + int(roll / 45.0 * half)))
+    # Negated so the marker moves the way a bubble level does: tilt the
+    # chassis left and the marker travels left. The raw angle sign is
+    # the opposite because positive roll lifts that side.
+    cx = max(0, min(width - 1, half - int(roll / 45.0 * half)))
     cy = max(0, min(height - 1, height // 2 + int(pitch / 45.0 * (height // 2))))
     for y in range(height):
         line = []
@@ -220,6 +225,11 @@ def render(t: dict, gz_hist: deque, bias: float, frames: int):
                    f"spread {hi-lo:6.2f}")
     out.append("")
 
+    ax, ay, az = t["accel_x"]/100.0, t["accel_y"]/100.0, t["accel_z"]/100.0
+    out.append(f"  accel     x {ax:6.2f}  y {ay:6.2f}  z {az:6.2f} m/s2"
+               f"   |a| {math.sqrt(ax*ax+ay*ay+az*az):5.2f}")
+    out.append("")
+
     flags = status_flags(t["status"])
     out.append("  status    " + (" ".join(flags) if flags else "-"))
     out.append("")
@@ -240,6 +250,104 @@ def render(t: dict, gz_hist: deque, bias: float, frames: int):
     out.append("  Ctrl-C to exit")
     sys.stdout.write("\n".join(out))
     sys.stdout.flush()
+
+
+AXIS_STEPS = [
+    ("level, wheels on the ground", "z", +1,
+     "gravity should appear on the axis that points up"),
+    ("nose down, front edge lowered", "x", +1,
+     "identifies the forward axis"),
+    ("rolled onto its left side", "y", +1,
+     "identifies the left axis"),
+]
+
+
+def read_accel(ser, samples: int = 40):
+    """Averages a burst of accelerometer readings, in m/s2."""
+    dec = Decoder()
+    acc = [[], [], []]
+    t0 = time.time()
+    while len(acc[0]) < samples and time.time() - t0 < 5.0:
+        for mtype, payload in dec.feed(ser.read(256)):
+            if mtype == MSG_TELEMETRY:
+                t = parse_telemetry(payload)
+                acc[0].append(t["accel_x"] / 100.0)
+                acc[1].append(t["accel_y"] / 100.0)
+                acc[2].append(t["accel_z"] / 100.0)
+    if not acc[0]:
+        return None
+    return [sum(a) / len(a) for a in acc]
+
+
+def identify_axes(ser):
+    """Works out how the module is mounted by watching where gravity
+    lands in each of three known chassis attitudes, then prints the
+    AXIS_MAP values that rotate the sensor into chassis coordinates.
+
+    Reading the silkscreen arrows is not reliable enough for this: they
+    describe the chip, not how it ended up on the robot, and a mistake
+    propagates all the way into the SLAM pose."""
+    print()
+    print("  IMU axis identification")
+    print("  " + "-" * 60)
+    print("  Gravity is the reference. Hold each attitude steady, then")
+    print("  press Enter. Nothing is written to the sensor; the result")
+    print("  is two constants to paste into config/board_config.h.")
+    print()
+
+    # sensor axis index that carries gravity, and its sign, per attitude
+    observed = {}
+    for label, chassis_axis, _, why in AXIS_STEPS:
+        print(f"  place the chassis: {label}")
+        print(f"    ({why})")
+        input("    Enter when steady... ")
+        a = read_accel(ser)
+        if a is None:
+            print("  no telemetry, aborting")
+            return
+        # Gravity dominates; the largest component names the axis
+        idx = max(range(3), key=lambda i: abs(a[i]))
+        sign = 1 if a[idx] > 0 else -1
+        print(f"    accel = ({a[0]:+6.2f}, {a[1]:+6.2f}, {a[2]:+6.2f}) m/s2"
+              f"   -> sensor {'XYZ'[idx]}{'+' if sign > 0 else '-'}")
+        if abs(a[idx]) < 7.0:
+            print("    WARNING gravity is spread across axes, the chassis")
+            print("            was probably not square to the floor")
+        observed[chassis_axis] = (idx, sign)
+        print()
+
+    # In each attitude the chassis axis named points up, so gravity
+    # measured along it reads positive on the sensor axis that aligns
+    # with it. That gives a direct chassis -> sensor mapping.
+    order = ["x", "y", "z"]
+    if len(observed) != 3 or len({v[0] for v in observed.values()}) != 3:
+        print("  the three attitudes did not resolve to distinct axes.")
+        print("  repeat with the chassis square to the floor each time.")
+        return
+
+    cfg = 0
+    sign_bits = 0
+    for pos, chassis_axis in enumerate(order):
+        src, sign = observed[chassis_axis]
+        cfg |= (src & 3) << (pos * 2)
+        if sign < 0:
+            # sign bit order is X at bit2, Y at bit1, Z at bit0
+            sign_bits |= 1 << (2 - pos)
+
+    print("  " + "-" * 60)
+    print("  chassis axis  <- sensor axis")
+    for pos, chassis_axis in enumerate(order):
+        src, sign = observed[chassis_axis]
+        print(f"    {chassis_axis} ({['forward','left','up'][pos]:7s})"
+              f"  <- {'XYZ'[src]}{'+' if sign > 0 else '-'}")
+    print()
+    print("  paste into config/board_config.h:")
+    print(f"    #define BNO055_AXIS_MAP         0x{cfg:02X}U")
+    print(f"    #define BNO055_AXIS_SIGN        0x{sign_bits:02X}U")
+    if cfg == 0x24 and sign_bits == 0x00:
+        print("  (that is the identity mapping, the module is already")
+        print("   aligned with the chassis)")
+    print()
 
 
 def measure_bias(ser, seconds: float) -> float:
@@ -283,6 +391,8 @@ def main():
     ap.add_argument("--bias", action="store_true",
                     help="measure the gyro zero offset while stationary")
     ap.add_argument("--seconds", type=float, default=10.0)
+    ap.add_argument("--axes", action="store_true",
+                    help="identify how the module is mounted, using gravity")
     ap.add_argument("--log", metavar="FILE", help="record samples as CSV")
     args = ap.parse_args()
 
@@ -290,6 +400,13 @@ def main():
         ser = serial.Serial(args.port, 115200, timeout=0.05)
     except serial.SerialException as e:
         sys.exit(f"cannot open {args.port}: {e}")
+
+    if args.axes:
+        try:
+            identify_axes(ser)
+        finally:
+            ser.close()
+        return
 
     if args.bias:
         try:

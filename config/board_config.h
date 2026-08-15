@@ -143,6 +143,28 @@
 // code refers to boards that pull it low.
 #define BNO055_ADDR             0x29U   // verified by scan
 
+// ---- IMU axis remap ----
+// The BNO055 can rotate its own output into chassis coordinates, so
+// every consumer including the SBC sees ROS convention (x forward,
+// y left, z up) regardless of how the module is bolted on. Doing it in
+// the sensor keeps the quaternion, gyro and accelerometer consistent
+// with each other, which a software rotation applied to only one of
+// them would not.
+//
+// AXIS_MAP_CONFIG bits: [5:4] source of Z, [3:2] source of Y,
+//                       [1:0] source of X;  00 = X, 01 = Y, 10 = Z
+// AXIS_MAP_SIGN   bits: [2] X negative, [1] Y negative, [0] Z negative
+//
+// 0x24 / 0x00 is the power on default and applies no rotation.
+// The remap register is writable only in CONFIG mode.
+//
+// TODO set from measurement. Run  ./tools/s2m_imu_view.py --axes
+// and follow the printed procedure. Until then the reported attitude
+// is in sensor frame, not chassis frame, and the SBC will see a pose
+// that is rotated relative to the URDF.
+#define BNO055_AXIS_MAP         0x24U   // identity, pending measurement
+#define BNO055_AXIS_SIGN        0x00U
+
 // ---- Status LED ----
 // This core board is NOT a stock Blue Pill. Its schematic wires the
 // user LED D2 through R6 to PB12; a standard Blue Pill would use PC13.

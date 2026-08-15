@@ -48,6 +48,8 @@
 #define REG_OPR_MODE        0x3D
 #define REG_PWR_MODE        0x3E
 #define REG_SYS_TRIGGER     0x3F
+#define REG_AXIS_MAP_CONFIG 0x41
+#define REG_AXIS_MAP_SIGN   0x42
 
 #define CHIP_ID_EXPECTED    0xA0
 
@@ -66,6 +68,10 @@ typedef enum {
     INIT_CHECK_ID,
     INIT_SET_CONFIG,
     INIT_WAIT_CONFIG,
+    INIT_SET_AXIS,
+    INIT_WAIT_AXIS,
+    INIT_SET_SIGN,
+    INIT_WAIT_SIGN,
     INIT_SET_UNITS,
     INIT_WAIT_UNITS,
     INIT_SET_POWER,
@@ -81,6 +87,8 @@ typedef enum {
     RUN_READ_QUAT,
     RUN_READ_GYRO,
     RUN_WAIT_GYRO,
+    RUN_READ_ACCEL,
+    RUN_WAIT_ACCEL,
     RUN_READ_CALIB,
     RUN_WAIT_CALIB
 } run_step_t;
@@ -98,6 +106,7 @@ static uint8_t     s_chip_id;      // whatever the last ID read returned
 // Latest values, updated only on a complete successful burst
 static int16_t s_quat[4];       // w, x, y, z at 1/16384 scale
 static int16_t s_gyro[3];       // x, y, z at 1/16 deg/s
+static int16_t s_accel[3];      // x, y, z at 1/100 m/s2, includes gravity
 static uint8_t s_calib;         // packed sys/gyr/acc/mag, 2 bits each
 
 static void run_poll(void);
@@ -123,6 +132,7 @@ void bno055_init(void)
     s_consecutive_fail = 0;
     memset(s_quat, 0, sizeof s_quat);
     memset(s_gyro, 0, sizeof s_gyro);
+    memset(s_accel, 0, sizeof s_accel);
     s_calib = 0;
     s_chip_id = 0xFF;
     wait_ms(BOOT_DELAY_MS);
@@ -136,6 +146,8 @@ static uint8_t init_poll(void)
     static const uint8_t pwr_normal = PWR_NORMAL;
     // Windows degrees, m/s2, deg/s, Celsius, and Android orientation
     static const uint8_t unit_sel   = 0x00;
+    static const uint8_t axis_map   = BNO055_AXIS_MAP;
+    static const uint8_t axis_sign  = BNO055_AXIS_SIGN;
 
     i2c_result_t r;
 
@@ -181,9 +193,44 @@ static uint8_t init_poll(void)
         r = i2c_poll();
         if (r == I2C_RESULT_DONE) {
             wait_ms(MODE_DELAY_MS);
-            s_init = INIT_SET_UNITS;
+            s_init = INIT_SET_AXIS;
         } else if (r == I2C_RESULT_ERROR) {
             s_init = INIT_SET_CONFIG;
+        }
+        break;
+
+    case INIT_SET_AXIS:
+        // Axis remap can only be written in CONFIG mode. Doing it in the
+        // sensor means every consumer, including the SBC, sees chassis
+        // coordinates without any of them having to know how the module
+        // happens to be bolted on.
+        if (wait_done() && i2c_start_write(BNO055_ADDR, REG_AXIS_MAP_CONFIG,
+                                           &axis_map, 1)) {
+            s_init = INIT_WAIT_AXIS;
+        }
+        break;
+
+    case INIT_WAIT_AXIS:
+        r = i2c_poll();
+        if (r == I2C_RESULT_DONE) {
+            s_init = INIT_SET_SIGN;
+        } else if (r == I2C_RESULT_ERROR) {
+            s_init = INIT_SET_AXIS;
+        }
+        break;
+
+    case INIT_SET_SIGN:
+        if (i2c_start_write(BNO055_ADDR, REG_AXIS_MAP_SIGN, &axis_sign, 1)) {
+            s_init = INIT_WAIT_SIGN;
+        }
+        break;
+
+    case INIT_WAIT_SIGN:
+        r = i2c_poll();
+        if (r == I2C_RESULT_DONE) {
+            s_init = INIT_SET_UNITS;
+        } else if (r == I2C_RESULT_ERROR) {
+            s_init = INIT_SET_SIGN;
         }
         break;
 
@@ -316,6 +363,28 @@ static void run_poll(void)
             s_gyro[0] = (int16_t)(s_buf[0] | (s_buf[1] << 8));
             s_gyro[1] = (int16_t)(s_buf[2] | (s_buf[3] << 8));
             s_gyro[2] = (int16_t)(s_buf[4] | (s_buf[5] << 8));
+            s_run = RUN_READ_ACCEL;
+        } else if (r == I2C_RESULT_ERROR) {
+            s_read_fail++;
+            s_consecutive_fail++;
+            s_run = RUN_IDLE;
+        }
+        break;
+
+    case RUN_READ_ACCEL:
+        // Gravity plus motion. Used for the bump and vibration events,
+        // and for identifying the sensor orientation on the chassis.
+        if (i2c_start_read(BNO055_ADDR, REG_ACC_DATA, s_buf, 6)) {
+            s_run = RUN_WAIT_ACCEL;
+        }
+        break;
+
+    case RUN_WAIT_ACCEL:
+        r = i2c_poll();
+        if (r == I2C_RESULT_DONE) {
+            s_accel[0] = (int16_t)(s_buf[0] | (s_buf[1] << 8));
+            s_accel[1] = (int16_t)(s_buf[2] | (s_buf[3] << 8));
+            s_accel[2] = (int16_t)(s_buf[4] | (s_buf[5] << 8));
             s_run = RUN_READ_CALIB;
         } else if (r == I2C_RESULT_ERROR) {
             s_read_fail++;
@@ -368,6 +437,10 @@ int16_t bno055_quat_x(void) { return s_quat[1]; }
 int16_t bno055_quat_y(void) { return s_quat[2]; }
 int16_t bno055_quat_z(void) { return s_quat[3]; }
 int16_t bno055_gyro_z(void) { return s_gyro[2]; }
+
+int16_t bno055_accel_x(void) { return s_accel[0]; }
+int16_t bno055_accel_y(void) { return s_accel[1]; }
+int16_t bno055_accel_z(void) { return s_accel[2]; }
 
 uint8_t bno055_calib(void)  { return s_calib; }
 

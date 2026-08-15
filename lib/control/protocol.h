@@ -115,6 +115,9 @@ typedef struct __attribute__((packed)) {
     int16_t  quat_y;
     int16_t  quat_z;
     int16_t  gyro_z;            // yaw rate, the term slip detection needs
+    int16_t  accel_x;           // 1/100 m/s2, gravity included
+    int16_t  accel_y;
+    int16_t  accel_z;
     uint16_t distance_mm;       // 2D120X, 0xFFFF when out of range
     uint16_t battery_mv;        // reserved, reads 0 until the ADC lands
     int16_t  duty_left;         // applied duty, for stall diagnosis

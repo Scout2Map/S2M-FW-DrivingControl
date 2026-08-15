@@ -221,7 +221,10 @@ void link_send_telemetry(void)
     t.quat_x = bno055_quat_x();
     t.quat_y = bno055_quat_y();
     t.quat_z = bno055_quat_z();
-    t.gyro_z = bno055_gyro_z();
+    t.gyro_z  = bno055_gyro_z();
+    t.accel_x = bno055_accel_x();
+    t.accel_y = bno055_accel_y();
+    t.accel_z = bno055_accel_z();
 
     t.distance_mm = dist_get_mm();
     t.battery_mv  = batt_get_mv();

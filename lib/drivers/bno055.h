@@ -25,6 +25,12 @@ int16_t  bno055_quat_y(void);
 int16_t  bno055_quat_z(void);
 int16_t  bno055_gyro_z(void);    // 1/16 deg/s, yaw rate
 
+// 1/100 m/s2, gravity included. Used for bump and vibration events and
+// for identifying how the module is mounted.
+int16_t  bno055_accel_x(void);
+int16_t  bno055_accel_y(void);
+int16_t  bno055_accel_z(void);
+
 // Packed calibration status: bits 7:6 sys, 5:4 gyr, 3:2 acc, 1:0 mag
 // Each field reads 3 when that subsystem is fully calibrated
 uint8_t  bno055_calib(void);
