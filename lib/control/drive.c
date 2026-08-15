@@ -208,23 +208,31 @@ static int16_t pid_step(int idx, float target_mps, float actual_mps)
     pid_state_t *p = &s_pid[idx];
     float err = target_mps - actual_mps;
 
-    // Feedforward carries the bulk of the command
-    float out = target_mps * PID_FF;
-    out += err * PID_KP;
+    // Feedforward carries the bulk of the command, the terms below only
+    // trim the residual
+    float ff = target_mps * PID_FF;
 
-    p->integral += err * PID_KI * LOOP_PERIOD_S;
-    p->integral  = clampf(p->integral, -PID_I_LIMIT, PID_I_LIMIT);
-    out += p->integral;
+    // Conditional integration. The accumulator only grows when doing so
+    // would not push an already saturated output further into the rail.
+    //
+    // An earlier version instead halved the accumulator whenever the
+    // output saturated, which discarded correction the loop had already
+    // earned and left a standing error the integrator could never close.
+    float unsat = ff + err * PID_KP + p->integral;
+    uint8_t saturated_high = (unsat >=  (float)DUTY_MAX);
+    uint8_t saturated_low  = (unsat <= -(float)DUTY_MAX);
+
+    if (!((saturated_high && err > 0.0f) || (saturated_low && err < 0.0f))) {
+        p->integral += err * PID_KI * LOOP_PERIOD_S;
+        p->integral  = clampf(p->integral, -PID_I_LIMIT, PID_I_LIMIT);
+    }
+
+    float out = ff + err * PID_KP + p->integral;
 
 #if PID_USE_D
     out += ((err - p->prev_err) / LOOP_PERIOD_S) * PID_KD;
 #endif
     p->prev_err = err;
-
-    // Stop the integrator charging further while the output saturates
-    if (out > (float)DUTY_MAX || out < -(float)DUTY_MAX) {
-        p->integral = clampf(p->integral, -PID_I_LIMIT * 0.5f, PID_I_LIMIT * 0.5f);
-    }
 
     return (int16_t)clampf(out, -(float)DUTY_MAX, (float)DUTY_MAX);
 }

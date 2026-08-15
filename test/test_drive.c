@@ -165,6 +165,31 @@ int main(void)
     check("straight run accumulates x only", x > 0.25f && fabsf(y) < 0.01f);
     check("straight run leaves heading unchanged", fabsf(th) < 0.01f);
 
+    // --- steady state error must reach zero ---
+    // The original gains left a 15% standing error on hardware because
+    // the integrator was both too slow and reset on every saturation
+    memset(g_speed, 0, sizeof g_speed);
+    g_now = 0;
+    drive_init(&stub_io);
+    hold(0.15f, 0.0f);
+    run_loops(1200);               // 6 seconds, enough for the integrator
+    printf("   settled %.4f m/s against a 0.1500 target\n", g_speed[0]);
+    check("steady state error is under 2 percent",
+          fabsf(g_speed[0] - 0.15f) < 0.003f);
+
+    // --- integrator survives saturation ---
+    // Anti-windup must stop accumulation, not discard what is banked
+    memset(g_speed, 0, sizeof g_speed);
+    g_now = 0;
+    drive_init(&stub_io);
+    hold(MAX_WHEEL_SPEED_MPS, 0.0f);   // saturates the output
+    run_loops(400);
+    hold(0.10f, 0.0f);                 // back into range
+    run_loops(600);
+    printf("   after saturation, settled %.4f m/s against 0.1000\n", g_speed[0]);
+    check("recovers cleanly from a saturated command",
+          fabsf(g_speed[0] - 0.10f) < 0.005f);
+
     // --- raw duty injection ---
     // Bring-up path: must bypass the PID entirely and report back
     // exactly what was asked for

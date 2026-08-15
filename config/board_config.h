@@ -181,24 +181,43 @@
 #define MM_PER_COUNT            (WHEEL_CIRCUM_MM / (float)COUNTS_PER_WHEEL_REV)
 
 // ---- Velocity PID ----
-// Executes in the main loop only, never inside an interrupt handler
-// Tune P first, then add I, D usually stays at zero on a geared drivetrain
-#define PID_KP                  180.0f
-#define PID_KI                  90.0f
+// Executes in the main loop only, never inside an interrupt handler.
+//
+// Tuned against the unloaded step response captured 2026-08-14.
+// That run settled at 172 mm/s against a 150 mm/s target, a 15% steady
+// error the loop never removed, because the original gains were far
+// too small: a 22 mm/s error asked for 4 permille of correction and
+// the integrator needed 48 seconds to cover the gap.
+//
+// Sizing rule used here: a 10% speed error should command roughly a
+// 10% duty correction. Full duty corresponds to MAX_WHEEL_SPEED_MPS,
+// so KP is on the order of DUTY_MAX / MAX_WHEEL_SPEED_MPS.
+//
+// These sit below what that rule alone suggests. The capture showed a
+// monotonic rise with no overshoot, so the real plant is slower than a
+// first order fit predicts and there is headroom to raise them further
+// if tracking proves sluggish once the chassis is loaded.
+//
+// Retune on the ground, not on a stand. Unloaded, the feedforward runs
+// about 16% high and the integrator spends seconds cancelling it, which
+// looks like a tuning fault but is only an artefact of no load.
+#define PID_KP                  3000.0f
+#define PID_KI                  3000.0f
 #define PID_USE_D               0        // preprocessor cannot compare floats
 #define PID_KD                  0.0f
-#define PID_I_LIMIT             400.0f  // anti windup clamp, permille
-// Feedforward slope, permille per m/s. Derived from the rated speed so
-// that full duty maps to MAX_WHEEL_SPEED_MPS. If this is set from the
-// no-load figure the loop commands a speed the drivetrain cannot reach
-// and the integrator sits saturated.
-//   1000 permille / 0.20 m/s = 5000
+
+// Must be large enough to absorb the feedforward error on its own.
+// Unloaded, the rated slope overshoots by roughly 100 permille at mid
+// speed, and the integrator has to cover that before it can trim.
+#define PID_I_LIMIT             600.0f
+
+// Feedforward slope, permille per m/s. Derived from the RATED speed so
+// full duty maps to MAX_WHEEL_SPEED_MPS.
 //
-// Note: at exactly MAX_WHEEL_SPEED_MPS the feedforward alone asks for
-// full duty, so the PID has no headroom left to correct with. That is
-// acceptable because the ceiling is rarely commanded, but if tracking
-// matters at top speed, lower MAX_WHEEL_SPEED_MPS to around 0.18 to
-// leave the loop some authority.
+// Measured unloaded the slope is nearer 4300, but the wheels were off
+// the ground. Under load the same duty yields less speed, so the rated
+// figure is the better default: it undershoots slightly on the bench,
+// which the PID trims, and lands close once the chassis carries itself.
 #define PID_FF                  5000.0f
 
 // 76rpm is the NO-LOAD figure. Rated speed under load is 58rpm, which
