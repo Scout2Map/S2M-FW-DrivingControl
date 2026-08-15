@@ -134,6 +134,35 @@
 #define DIST_ADC_PIN            4U      // PA4, ADC12_IN4
 #define DIST_ADC_CHANNEL        4U
 
+// Median over five samples. The sensor is optically noisy and a single
+// spurious reading must not be able to trigger a proximity stop.
+#define DIST_MEDIAN_N           5U
+
+// The response curve peaks near 4cm and falls again below it, so a
+// reading above the peak identifies nothing. Release uses a lower
+// threshold than entry so the alarm cannot chatter across the peak.
+#define DIST_RELEASE_MV         2100U
+
+// ---- Battery monitor ----
+// Divider 30k over 7.5k, ratio 0.200. Chosen over 10k/3.3k for the
+// larger headroom (780mV against 174mV at full charge) and a third of
+// the quiescent draw. Source impedance is 6k, well inside what the
+// 239.5 cycle sampling window supports.
+#define BATT_ADC_PIN            5U      // PA5, ADC12_IN5
+#define BATT_ADC_CHANNEL        5U
+#define BATT_DIVIDER_RATIO      200U    // parts per thousand
+
+// 3S lithium polymer. Warn at 3.5V per cell, critical at 3.3V per cell.
+// Below 3.0V per cell the pack is damaged, so the critical point leaves
+// margin to return the robot rather than mark the point of no return.
+#define BATT_WARN_MV            10500U
+#define BATT_CRITICAL_MV        9900U
+#define BATT_HYST_MV            300U
+
+// The pack cannot change meaningfully inside one ADC period, so it is
+// sampled every fifth pass
+#define BATT_SAMPLE_DIVIDER     5U
+
 // ---- IMU BNO055 on I2C2 ----
 // Moved off PB6/PB7 because TIM4 now owns those pins
 #define IMU_I2C_SCL_PIN         10U     // PB10

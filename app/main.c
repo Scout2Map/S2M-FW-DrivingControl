@@ -26,6 +26,7 @@
 #include "drive.h"
 #include "link.h"
 #include "bno055.h"
+#include "adc.h"
 #include "calib.h"
 
 // ============================================================
@@ -67,6 +68,7 @@ int main(void)
     // Starts the boot wait, the device needs ~700ms before it answers.
     // Init continues in the background from bno055_poll().
     bno055_init();
+    adc_init();
 
     drive_init(board_io_get());
 
@@ -103,7 +105,16 @@ int main(void)
 
         if ((now - t_adc) >= ADC_PERIOD_MS) {
             t_adc = now;
-            // dist_sample();  GP2D120 median filter, added next
+            adc_poll();
+
+            // Reporting a flat pack without acting on it would leave the
+            // robot to brown out mid mission and lose whatever it had
+            // not yet transmitted. Cutting drive keeps the SBC, the USB
+            // link and the local buffer alive long enough to recover the
+            // data, which matters more than the last few metres.
+            if (batt_get_state() == BATT_CRITICAL) {
+                motor_estop();
+            }
         }
 
         if ((now - t_telem) >= TELEM_PERIOD_MS) {

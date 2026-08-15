@@ -151,6 +151,15 @@ def parse_telemetry(p: bytes) -> dict:
         "imu_calib", "reserved"), f))
 
 
+def dist_text(mm: int) -> str:
+    """0xFFFF and 0xFFFE are sentinels, not distances."""
+    if mm == 0xFFFF:
+        return "  --"
+    if mm == 0xFFFE:
+        return "CLOSE"
+    return f"{mm:4d}"
+
+
 def status_text(s: int) -> str:
     names = [n for bit, n in STATUS_BITS if s & bit]
     return "|".join(names) if names else "-"
@@ -254,6 +263,8 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                             f"duty L{t['duty_l']:>5} R{t['duty_r']:>5}  "
                             f"odom {t['x_mm']:>6},{t['y_mm']:>6} "
                             f"{t['th_mrad']:>6}mrad")
+                    line += (f"  dist {dist_text(t['dist_mm'])}"
+                             f"  batt {t['batt_mv']/1000:5.2f}V")
                     if show_imu:
                         yaw = quat_to_yaw_deg(t)
                         line += (f"  yaw {yaw:>7.1f}deg"

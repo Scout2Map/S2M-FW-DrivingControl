@@ -29,6 +29,7 @@
 #include "encoder.h"
 #include "bno055.h"
 #include "i2c.h"
+#include "adc.h"
 #include "systick.h"
 
 // Firmware version reported in MSG_BOOT_INFO
@@ -42,14 +43,6 @@ static uint8_t         s_boot_sent;
 static uint8_t         s_estop_latched;
 static uint32_t        s_frames_tx;
 static uint32_t        s_frames_dropped;
-
-// Supplied by the IR distance driver. 0xFFFF means no valid reading.
-uint16_t dist_get_mm(void) __attribute__((weak));
-uint16_t dist_get_mm(void) { return 0xFFFFU; }
-
-// Supplied by the battery monitor once the ADC driver lands.
-uint16_t batt_get_mv(void) __attribute__((weak));
-uint16_t batt_get_mv(void) { return 0; }
 
 void link_init(void)
 {
@@ -239,6 +232,8 @@ void link_send_telemetry(void)
     if (drive_cmd_expired())  st |= STATUS_CMD_TIMEOUT;
     if (s_estop_latched)      st |= STATUS_ESTOP_LATCHED;
     if (bno055_is_ok())       st |= STATUS_IMU_OK;
+    if (batt_get_state() == BATT_WARN)     st |= STATUS_BATT_WARN;
+    if (batt_get_state() == BATT_CRITICAL) st |= STATUS_BATT_CRITICAL;
     // Bits 7:6 of the calibration byte are the system field; 3 means the
     // fusion result is trustworthy in absolute terms
     if ((bno055_calib() >> 6) == 3U) st |= STATUS_IMU_CALIBRATED;
