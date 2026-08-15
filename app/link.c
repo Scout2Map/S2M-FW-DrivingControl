@@ -156,6 +156,8 @@ static void handle_command(uint8_t type, const uint8_t *payload, uint8_t len)
         d.i2c_recoveries = (uint16_t)i2c_recovery_count();
         d.batt_counts    = batt_get_counts();
         d.batt_mv        = batt_get_mv();
+        d.dist_counts    = dist_get_counts();
+        d.dist_mv        = dist_get_mv();
         send_frame(MSG_DIAG, &d, sizeof d);
         break;
     }

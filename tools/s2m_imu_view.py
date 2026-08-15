@@ -100,7 +100,17 @@ class Decoder:
                 del self.buf[:2]
 
 
+class VersionMismatch(Exception):
+    """Payload size does not match what this tool expects."""
+
+
 def parse_telemetry(p: bytes) -> dict:
+    want = struct.calcsize(TELEMETRY_FMT)
+    if len(p) != want:
+        raise VersionMismatch(
+            f"telemetry frame is {len(p)} bytes, this tool expects {want}.\n"
+            f"  The board is running different firmware than this checkout.\n"
+            f"  Rebuild and reflash:  make flash")
     f = struct.unpack(TELEMETRY_FMT, p)
     return dict(zip((
         "t_ms", "enc_l", "enc_r", "spd_l", "spd_r",
@@ -585,6 +595,9 @@ def main():
     if args.accel:
         try:
             watch_accel(ser)
+        except VersionMismatch as e:
+            sys.stdout.write(SHOW + "\n")
+            print(f"  {e}")
         finally:
             ser.close()
         return
@@ -592,6 +605,8 @@ def main():
     if args.axes:
         try:
             identify_axes(ser)
+        except VersionMismatch as e:
+            print(f"  {e}")
         finally:
             ser.close()
         return
@@ -599,6 +614,8 @@ def main():
     if args.bias:
         try:
             measure_bias(ser, args.seconds)
+        except VersionMismatch as e:
+            print(f"  {e}")
         finally:
             ser.close()
         return
@@ -636,6 +653,9 @@ def main():
                 if now - last_draw > 0.1:
                     render(t, gz_hist, 0.0, frames)
                     last_draw = now
+    except VersionMismatch as e:
+        sys.stdout.write(SHOW + "\n")
+        print(f"  {e}")
     except KeyboardInterrupt:
         pass
     finally:

@@ -13,6 +13,7 @@ Usage
     ./s2m_console.py --step 150         step response capture for PID work
     ./s2m_console.py --imu              add heading and yaw rate columns
     ./s2m_console.py --diag             IMU and I2C bring-up diagnostics
+    ./s2m_console.py --dist             live raw range finder readout
     ./s2m_console.py --calib-batt       recalibrate the battery scale
     ./s2m_console.py --scan             list every device on the I2C bus
     ./s2m_console.py --estop            latch an emergency stop
@@ -32,6 +33,11 @@ try:
     import serial
 except ImportError:
     sys.exit("pyserial missing: pip install pyserial")
+
+# Bumped whenever a payload layout changes. The firmware reports its own
+# value in BOOT_INFO, so a stale flash is caught on connect rather than
+# surfacing later as a malformed frame.
+PROTO_VERSION = 1
 
 SYNC0, SYNC1 = 0xAA, 0x55
 HEADER_LEN, CRC_LEN = 4, 2
@@ -65,7 +71,7 @@ STATUS_BITS = [
 
 TELEMETRY_FMT = "<IiihhiiihhhhhhhhHHhhHBB"
 BOOT_INFO_FMT = "<BBBBHH"
-DIAG_FMT      = "<BBBBIIHHHH"
+DIAG_FMT      = "<BBBBIIHHHHHH"
 
 # Addresses worth naming when they turn up on this robot's bus
 KNOWN_I2C = {
@@ -142,8 +148,27 @@ class Decoder:
                 del self.buf[:2]
 
 
+class VersionMismatch(Exception):
+    """Payload size does not match what this tool expects."""
+
+
+def _unpack(fmt: str, payload: bytes, what: str):
+    """Unpacks with a readable error instead of a struct traceback.
+
+    A size mismatch always means the firmware on the board predates or
+    postdates this file. That is worth saying plainly, because the raw
+    struct error names neither the frame nor the remedy."""
+    want = struct.calcsize(fmt)
+    if len(payload) != want:
+        raise VersionMismatch(
+            f"{what} frame is {len(payload)} bytes, this tool expects {want}.\n"
+            f"  The board is running different firmware than this checkout.\n"
+            f"  Rebuild and reflash:  make flash")
+    return struct.unpack(fmt, payload)
+
+
 def parse_telemetry(p: bytes) -> dict:
-    f = struct.unpack(TELEMETRY_FMT, p)
+    f = _unpack(TELEMETRY_FMT, p, "telemetry")
     return dict(zip((
         "t_ms", "enc_l", "enc_r", "spd_l", "spd_r",
         "x_mm", "y_mm", "th_mrad",
@@ -165,6 +190,54 @@ def dist_text(mm: int) -> str:
 def status_text(s: int) -> str:
     names = [n for bit, n in STATUS_BITS if s & bit]
     return "|".join(names) if names else "-"
+
+
+def watch_distance(ser):
+    """Live raw readout of the range finder.
+
+    A cooked distance cannot tell a dead sensor from an unpowered one
+    from a mismatched response curve, because all three produce a
+    plausible looking number or no number at all. The raw voltage
+    separates them immediately."""
+    print()
+    print("  live range finder. Move a hand in front of the sensor.")
+    print("  Ctrl-C to stop.")
+    print()
+    print("  A working GP2D120X should read roughly:")
+    print("    nothing in front      0.3 to 0.5 V")
+    print("    hand at 20 cm         about 0.6 V")
+    print("    hand at 10 cm         about 1.1 V")
+    print("    hand at  5 cm         about 2.0 V")
+    print("    hand touching         falls again, this is the blind zone")
+    print()
+    print("  A reading pinned at 0.00 V means no signal reaches PA4:")
+    print("  check the sensor has 5 V, shares a ground, and that its")
+    print("  output pin is the one wired to PA4.")
+    print()
+
+    dec = Decoder()
+    last = 0.0
+    sys.stdout.write("\033[?25l")
+    try:
+        while True:
+            now = time.time()
+            if now - last > 0.15:
+                ser.write(encode(MSG_CMD_DIAG))
+                last = now
+            for mtype, payload in dec.feed(ser.read(256)):
+                if mtype != MSG_DIAG:
+                    continue
+                d = struct.unpack(DIAG_FMT, payload)
+                counts, mv = d[10], d[11]
+                bar_n = min(40, int(mv / 60))
+                sys.stdout.write(
+                    f"\r  {counts:4d} counts  {mv/1000:5.3f} V  "
+                    f"|{'#' * bar_n}{'.' * (40 - bar_n)}|   ")
+                sys.stdout.flush()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        sys.stdout.write("\033[?25h\n")
 
 
 def calibrate_battery(ser):
@@ -189,7 +262,7 @@ def calibrate_battery(ser):
     while time.time() - t0 < 3.0 and counts is None:
         for mtype, payload in dec.feed(ser.read(256)):
             if mtype == MSG_DIAG:
-                d = struct.unpack(DIAG_FMT, payload)
+                d = _unpack(DIAG_FMT, payload, "diagnostics")
                 counts, reported = d[8], d[9]
 
     if counts is None:
@@ -268,9 +341,13 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
 
         for mtype, payload in dec.feed(data):
             if mtype == MSG_BOOT_INFO:
-                v = struct.unpack(BOOT_INFO_FMT, payload)
+                v = _unpack(BOOT_INFO_FMT, payload, "boot info")
                 print(f"[boot] proto v{v[0]}  fw {v[1]}.{v[2]}.{v[3]}  "
                       f"{v[4]} counts/rev  {v[5]} mm base")
+                if v[0] != PROTO_VERSION:
+                    print(f"  WARNING firmware speaks protocol v{v[0]}, "
+                          f"this tool speaks v{PROTO_VERSION}.")
+                    print("  Rebuild and reflash:  make flash")
             elif mtype == MSG_PONG:
                 print("[pong]")
             elif mtype == MSG_I2C_SCAN:
@@ -295,7 +372,7 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                 if 0x29 in found and 0x28 not in found:
                     print("  -> set BNO055_ADDR to 0x29 in board_config.h")
             elif mtype == MSG_DIAG:
-                d = struct.unpack(DIAG_FMT, payload)
+                d = _unpack(DIAG_FMT, payload, "diagnostics")
                 steps = ["WAIT_BOOT", "READ_ID", "CHECK_ID", "SET_CONFIG",
                          "WAIT_CONFIG", "SET_UNITS", "WAIT_UNITS",
                          "SET_POWER", "WAIT_POWER", "SET_NDOF",
@@ -311,6 +388,8 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                 print(f"       i2c err/recover: {d[6]} / {d[7]}")
                 print(f"       battery        : {d[9]/1000:.3f} V "
                       f"({d[8]} counts)")
+                print(f"       distance ch    : {d[11]} mV "
+                      f"({d[10]} counts)")
             elif mtype == MSG_TELEMETRY:
                 t = parse_telemetry(payload)
                 if csv:
@@ -382,6 +461,8 @@ def main():
                     help="dump IMU and I2C bring-up diagnostics")
     ap.add_argument("--scan", action="store_true",
                     help="probe every address on the I2C bus")
+    ap.add_argument("--dist", action="store_true",
+                    help="live raw readout of the range finder")
     ap.add_argument("--calib-batt", action="store_true",
                     help="derive BATT_UV_PER_COUNT from a meter reading")
     ap.add_argument("--csv", action="store_true")
@@ -407,6 +488,8 @@ def main():
         elif args.ping:
             ser.write(encode(MSG_CMD_PING))
             run_monitor(ser, duration=1.0)
+        elif args.dist:
+            watch_distance(ser)
         elif args.calib_batt:
             calibrate_battery(ser)
         elif args.diag:
@@ -431,6 +514,8 @@ def main():
             ser.write(cmd_velocity(0, 0))
         else:
             run_monitor(ser, csv=args.csv, show_imu=args.imu)
+    except VersionMismatch as e:
+        print(f"\n  {e}")
     except KeyboardInterrupt:
         # Always leave the robot stopped, whatever happened
         ser.write(cmd_velocity(0, 0))

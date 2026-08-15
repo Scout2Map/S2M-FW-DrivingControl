@@ -63,6 +63,8 @@ static uint16_t s_dist_raw[DIST_MEDIAN_N];
 static uint8_t  s_dist_idx;
 static uint16_t s_dist_mm;
 static uint8_t  s_dist_too_close;
+static uint16_t s_dist_counts;      // raw, exposed for bring-up
+static uint16_t s_dist_mv;
 
 static uint32_t s_batt_filt;        // IIR accumulator, scaled by 16
 static uint16_t s_batt_mv;
@@ -105,6 +107,8 @@ void adc_init(void)
         s_dist_raw[i] = 0;
     }
     s_dist_idx       = 0;
+    s_dist_counts    = 0;
+    s_dist_mv        = 0;
     s_dist_mm        = DIST_INVALID;
     s_dist_too_close = 0;
     s_batt_filt      = 0;
@@ -185,8 +189,10 @@ static void dist_sample(void)
 
     s_dist_raw[s_dist_idx] = counts;
     s_dist_idx = (uint8_t)((s_dist_idx + 1U) % DIST_MEDIAN_N);
+    s_dist_counts = counts;
 
     uint16_t mv = counts_to_mv(median_of(s_dist_raw, DIST_MEDIAN_N));
+    s_dist_mv = mv;
 
     if (mv >= DIST_AMBIGUOUS_MV) {
         // Past the curve peak. The target is at or inside the minimum
@@ -284,7 +290,9 @@ void adc_poll(void)
     }
 }
 
-uint16_t     dist_get_mm(void)    { return s_dist_mm; }
+uint16_t     dist_get_mm(void)     { return s_dist_mm; }
+uint16_t     dist_get_counts(void) { return s_dist_counts; }
+uint16_t     dist_get_mv(void)     { return s_dist_mv; }
 uint8_t      dist_is_too_close(void) { return s_dist_too_close; }
 uint16_t     batt_get_mv(void)    { return s_batt_mv; }
 uint16_t     batt_get_counts(void) { return s_batt_counts; }

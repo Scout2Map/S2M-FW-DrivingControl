@@ -30,6 +30,10 @@ void         adc_poll(void);        // call at ADC_PERIOD_MS
 
 uint16_t     dist_get_mm(void);
 uint8_t      dist_is_too_close(void);
+// Raw channel, for bring-up. A cooked distance cannot distinguish a
+// dead sensor from an unpowered one from a wrong response curve.
+uint16_t     dist_get_counts(void);
+uint16_t     dist_get_mv(void);     // after the median filter
 
 uint16_t     batt_get_mv(void);     // pack voltage, filtered
 // Raw ADC counts behind the last battery sample. Only used to

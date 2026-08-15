@@ -150,6 +150,8 @@ typedef struct __attribute__((packed)) {
     // calibrated does not appear on both sides of the calculation.
     uint16_t batt_counts;
     uint16_t batt_mv;
+    uint16_t dist_counts;       // raw ADC, before the response curve
+    uint16_t dist_mv;           // after the median filter
 } diag_t;
 
 // MSG_I2C_SCAN, 17 bytes
