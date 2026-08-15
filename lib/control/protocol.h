@@ -68,6 +68,9 @@
 // Orientation before that point is usable for relative motion but the
 // absolute heading may drift, so the SBC should weight it accordingly.
 #define STATUS_IMU_CALIBRATED   (1U << 8)
+// Pack below the cell damage point. The firmware has cut drive; this is
+// the one battery condition it does not leave to the SBC.
+#define STATUS_BATT_DEAD        (1U << 9)
 
 // ============================================================
 // Payload layouts

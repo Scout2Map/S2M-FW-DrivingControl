@@ -129,6 +129,16 @@ int main(void)
           BATT_CRITICAL_MV >= 9000U);
     check("warn sits below a nominal pack", BATT_WARN_MV < 11100U);
 
+    // --- the reporting thresholds leave the SBC room to act ---
+    printf("   dead %u mV (pack protection, firmware acts)\n", BATT_DEAD_MV);
+    check("dead sits below critical", BATT_DEAD_MV < BATT_CRITICAL_MV);
+    check("dead is at or above the cell damage point",
+          BATT_DEAD_MV >= 9000U);
+    check("critical leaves margin above the protection floor",
+          BATT_CRITICAL_MV - BATT_DEAD_MV >= 600U);
+    check("dead recovery hysteresis cannot reach critical",
+          BATT_DEAD_MV + BATT_HYST_MV * 2U < BATT_CRITICAL_MV + BATT_HYST_MV);
+
     // --- divider cannot overrange the ADC ---
     {
         uint32_t full_mv = 12900U * BATT_DIVIDER_RATIO / 1000U;

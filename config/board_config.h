@@ -152,12 +152,24 @@
 #define BATT_ADC_CHANNEL        5U
 #define BATT_DIVIDER_RATIO      200U    // parts per thousand
 
-// 3S lithium polymer. Warn at 3.5V per cell, critical at 3.3V per cell.
-// Below 3.0V per cell the pack is damaged, so the critical point leaves
-// margin to return the robot rather than mark the point of no return.
+// 3S lithium polymer. These are REPORTING thresholds; the SBC owns what
+// to do about them. Returning to the start point and flushing buffered
+// events both need the wheels turning, so the firmware must not stop
+// the robot on its own account.
+//
+//   WARN      3.5V per cell, time to plan a return
+//   CRITICAL  3.3V per cell, return now and back up
 #define BATT_WARN_MV            10500U
 #define BATT_CRITICAL_MV        9900U
 #define BATT_HYST_MV            300U
+
+// Pack protection, not mission policy. Below 3.0V per cell a lithium
+// polymer cell is being damaged, and continuing to pull stall current
+// through it is a fire risk rather than a capacity question. This is
+// the same class of decision as the stall guard: a hardware limit the
+// firmware enforces because no policy above it can make the chemistry
+// safe. The SBC has the whole span from CRITICAL down to here to act.
+#define BATT_DEAD_MV            9000U
 
 // The pack cannot change meaningfully inside one ADC period, so it is
 // sampled every fifth pass

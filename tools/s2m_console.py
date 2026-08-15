@@ -59,6 +59,7 @@ STATUS_BITS = [
     (1 << 6, "BATT_WARN"),
     (1 << 7, "BATT_CRIT"),
     (1 << 8, "IMU_CAL"),
+    (1 << 9, "BATT_DEAD"),
 ]
 
 TELEMETRY_FMT = "<IiihhiiihhhhhhhhHHhhHBB"

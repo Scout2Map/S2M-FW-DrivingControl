@@ -107,12 +107,18 @@ int main(void)
             t_adc = now;
             adc_poll();
 
-            // Reporting a flat pack without acting on it would leave the
-            // robot to brown out mid mission and lose whatever it had
-            // not yet transmitted. Cutting drive keeps the SBC, the USB
-            // link and the local buffer alive long enough to recover the
-            // data, which matters more than the last few metres.
-            if (batt_get_state() == BATT_CRITICAL) {
+            // Battery state is reported, not acted on. Returning to the
+            // start point and flushing buffered events both require
+            // driving, so cutting power here would make the very
+            // policies the SBC needs to run impossible, and would strand
+            // the robot along with its data.
+            //
+            // A dead SBC is already covered: no commands means the
+            // command timeout stops the robot within CMD_TIMEOUT_MS.
+            //
+            // The one exception below is pack protection, not mission
+            // policy. See BATT_DEAD_MV.
+            if (batt_get_state() == BATT_DEAD) {
                 motor_estop();
             }
         }

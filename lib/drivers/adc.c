@@ -244,12 +244,21 @@ static void batt_sample(void)
                                            s_batt_state = BATT_OK;
         break;
     case BATT_CRITICAL:
-        if (s_batt_mv > BATT_CRITICAL_MV + BATT_HYST_MV)
+        if (s_batt_mv < BATT_DEAD_MV)      s_batt_state = BATT_DEAD;
+        else if (s_batt_mv > BATT_CRITICAL_MV + BATT_HYST_MV)
                                            s_batt_state = BATT_WARN;
+        break;
+    case BATT_DEAD:
+        // Recovers only on a genuine reconnect or a fresh pack, well
+        // clear of the damage point. A sagging rail must not be able to
+        // flap in and out of the protection state.
+        if (s_batt_mv > BATT_DEAD_MV + BATT_HYST_MV * 2U)
+                                           s_batt_state = BATT_CRITICAL;
         break;
     default:
         // First classification after priming
-        if (s_batt_mv < BATT_CRITICAL_MV)      s_batt_state = BATT_CRITICAL;
+        if (s_batt_mv < BATT_DEAD_MV)          s_batt_state = BATT_DEAD;
+        else if (s_batt_mv < BATT_CRITICAL_MV) s_batt_state = BATT_CRITICAL;
         else if (s_batt_mv < BATT_WARN_MV)     s_batt_state = BATT_WARN;
         else                                   s_batt_state = BATT_OK;
         break;

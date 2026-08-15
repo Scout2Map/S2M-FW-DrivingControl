@@ -234,6 +234,7 @@ void link_send_telemetry(void)
     if (bno055_is_ok())       st |= STATUS_IMU_OK;
     if (batt_get_state() == BATT_WARN)     st |= STATUS_BATT_WARN;
     if (batt_get_state() == BATT_CRITICAL) st |= STATUS_BATT_CRITICAL;
+    if (batt_get_state() == BATT_DEAD)     st |= STATUS_BATT_DEAD;
     // Bits 7:6 of the calibration byte are the system field; 3 means the
     // fusion result is trustworthy in absolute terms
     if ((bno055_calib() >> 6) == 3U) st |= STATUS_IMU_CALIBRATED;

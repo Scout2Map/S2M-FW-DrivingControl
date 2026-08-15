@@ -14,11 +14,15 @@
 #define DIST_INVALID    0xFFFFU     // nothing within range
 #define DIST_TOO_CLOSE  0xFFFEU     // inside the minimum range, distance unknown
 
+// OK, WARN and CRITICAL are advisory: the SBC decides what to do.
+// DEAD is not advisory; the firmware cuts drive to stop the pack being
+// destroyed, because no mission policy can make that safe.
 typedef enum {
     BATT_UNKNOWN = 0,
     BATT_OK,
     BATT_WARN,
-    BATT_CRITICAL
+    BATT_CRITICAL,
+    BATT_DEAD
 } batt_state_t;
 
 void         adc_init(void);

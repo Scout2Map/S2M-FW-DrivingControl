@@ -217,7 +217,7 @@ def tilt_gauge(roll: float, pitch: float, width: int = 21) -> list:
 def status_flags(s: int) -> list:
     names = [(0, "ENABLED"), (1, "OPENLOOP"), (2, "STALL"), (3, "CMD_TIMEOUT"),
              (4, "ESTOP"), (5, "IMU_OK"), (6, "BATT_WARN"), (7, "BATT_CRIT"),
-             (8, "IMU_CAL")]
+             (8, "IMU_CAL"), (9, "BATT_DEAD")]
     return [n for bit, n in names if s & (1 << bit)]
 
 
