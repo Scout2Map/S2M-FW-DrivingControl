@@ -30,7 +30,14 @@
 #include "board_config.h"
 #include "adc.h"
 
+// The distance half of this file compiles only when the analog sensor
+// is the one selected. With the time of flight part, vl53l0x.c defines
+// the same interface and the ADC carries the battery alone.
+#define ADC_HAS_DISTANCE  (DIST_SENSOR == DIST_SENSOR_ANALOG_IR)
+
 #define ADC_MAX             4095U
+
+#if ADC_HAS_DISTANCE
 
 // GP2D120X transfer curve, from the datasheet. Voltage falls as the
 // target recedes, so the table is ordered by descending voltage.
@@ -66,6 +73,8 @@ static uint8_t  s_dist_too_close;
 static uint16_t s_dist_counts;      // raw, exposed for bring-up
 static uint16_t s_dist_mv;
 
+#endif // ADC_HAS_DISTANCE
+
 static uint32_t s_batt_filt;        // IIR accumulator, scaled by 16
 static uint16_t s_batt_mv;
 static uint16_t s_batt_counts;      // raw, exposed for recalibration
@@ -83,13 +92,17 @@ void adc_init(void)
 {
     RCC->APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_ADC1EN;
 
+#if ADC_HAS_DISTANCE
     gpio_analog(DIST_ADC_PIN);
+#endif
     gpio_analog(BATT_ADC_PIN);
 
     // Longest sampling window on both channels. The battery divider
     // presents 6k of source impedance and needs the time to settle.
-    ADC1->SMPR2 = (7U << (DIST_ADC_CHANNEL * 3U))
-                | (7U << (BATT_ADC_CHANNEL * 3U));
+    ADC1->SMPR2 = (7U << (BATT_ADC_CHANNEL * 3U));
+#if ADC_HAS_DISTANCE
+    ADC1->SMPR2 |= (7U << (DIST_ADC_CHANNEL * 3U));
+#endif
 
     ADC1->SQR1 = 0;                     // one conversion per sequence
     ADC1->CR1  = 0;
@@ -103,6 +116,7 @@ void adc_init(void)
     ADC1->CR2 |= ADC_CR2_CAL;
     while (ADC1->CR2 & ADC_CR2_CAL) { }
 
+#if ADC_HAS_DISTANCE
     for (uint8_t i = 0; i < DIST_MEDIAN_N; i++) {
         s_dist_raw[i] = 0;
     }
@@ -111,6 +125,7 @@ void adc_init(void)
     s_dist_mv        = 0;
     s_dist_mm        = DIST_INVALID;
     s_dist_too_close = 0;
+#endif
     s_batt_filt      = 0;
     s_batt_mv        = 0;
     s_batt_counts    = 0;
@@ -134,6 +149,11 @@ static uint16_t adc_convert(uint8_t channel)
     return (uint16_t)(ADC1->DR & ADC_MAX);
 }
 
+#if ADC_HAS_DISTANCE
+
+// Only the distance path needs pin millivolts. The battery converts
+// straight from counts using its calibrated scale, so it never goes
+// through the nominal reference here.
 static uint16_t counts_to_mv(uint16_t counts)
 {
     return (uint16_t)(((uint32_t)counts * 3300U) / ADC_MAX);
@@ -217,6 +237,8 @@ static void dist_sample(void)
     s_dist_mm = (mv <= DIST_FARTHEST_MV) ? DIST_INVALID : mv_to_mm(mv);
 }
 
+#endif // ADC_HAS_DISTANCE
+
 static void batt_sample(void)
 {
     uint16_t counts = adc_convert(BATT_ADC_CHANNEL);
@@ -280,7 +302,9 @@ void adc_poll(void)
 {
     static uint8_t divider;
 
+#if ADC_HAS_DISTANCE
     dist_sample();
+#endif
 
     // The pack cannot change meaningfully in 40ms, so sampling it every
     // cycle would only add conversions and filter lag
@@ -290,10 +314,12 @@ void adc_poll(void)
     }
 }
 
-uint16_t     dist_get_mm(void)     { return s_dist_mm; }
-uint16_t     dist_get_counts(void) { return s_dist_counts; }
-uint16_t     dist_get_mv(void)     { return s_dist_mv; }
+#if ADC_HAS_DISTANCE
+uint16_t     dist_get_mm(void)       { return s_dist_mm; }
+uint16_t     dist_get_counts(void)   { return s_dist_counts; }
+uint16_t     dist_get_mv(void)       { return s_dist_mv; }
 uint8_t      dist_is_too_close(void) { return s_dist_too_close; }
+#endif
 uint16_t     batt_get_mv(void)    { return s_batt_mv; }
 uint16_t     batt_get_counts(void) { return s_batt_counts; }
 batt_state_t batt_get_state(void) { return s_batt_state; }

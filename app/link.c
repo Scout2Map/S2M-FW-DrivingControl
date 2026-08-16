@@ -30,6 +30,8 @@
 #include "bno055.h"
 #include "i2c.h"
 #include "adc.h"
+#include "dist.h"
+#include "vl53l0x.h"
 #include "systick.h"
 
 // Firmware version reported in MSG_BOOT_INFO
@@ -158,6 +160,12 @@ static void handle_command(uint8_t type, const uint8_t *payload, uint8_t len)
         d.batt_mv        = batt_get_mv();
         d.dist_counts    = dist_get_counts();
         d.dist_mv        = dist_get_mv();
+#if DIST_SENSOR == DIST_SENSOR_VL53L0X
+        // Reuse the two spare bytes rather than growing the frame: with
+        // a digital sensor there is no millivolt reading to report, so
+        // the field carries the model ID and init stage instead.
+        d.dist_mv = (uint16_t)((vl53l0x_model_id() << 8) | vl53l0x_state());
+#endif
         send_frame(MSG_DIAG, &d, sizeof d);
         break;
     }

@@ -8,11 +8,7 @@
 #define ADC_H
 
 #include <stdint.h>
-
-// Distance sentinels. Both are outside any real measurement so the
-// consumer never has to carry a separate validity flag.
-#define DIST_INVALID    0xFFFFU     // nothing within range
-#define DIST_TOO_CLOSE  0xFFFEU     // inside the minimum range, distance unknown
+#include "dist.h"    // distance interface, shared with the ToF driver
 
 // OK, WARN and CRITICAL are advisory: the SBC decides what to do.
 // DEAD is not advisory; the firmware cuts drive to stop the pack being
@@ -28,12 +24,6 @@ typedef enum {
 void         adc_init(void);
 void         adc_poll(void);        // call at ADC_PERIOD_MS
 
-uint16_t     dist_get_mm(void);
-uint8_t      dist_is_too_close(void);
-// Raw channel, for bring-up. A cooked distance cannot distinguish a
-// dead sensor from an unpowered one from a wrong response curve.
-uint16_t     dist_get_counts(void);
-uint16_t     dist_get_mv(void);     // after the median filter
 
 uint16_t     batt_get_mv(void);     // pack voltage, filtered
 // Raw ADC counts behind the last battery sample. Only used to

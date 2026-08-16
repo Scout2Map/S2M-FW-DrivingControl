@@ -130,7 +130,35 @@
 #define ENC_L_INVERT            1       // verified
 #define ENC_R_INVERT            0       // verified
 
+// ---- Distance sensor selection ----
+// Two parts are supported on the same interface. The analog Sharp part
+// costs an ADC channel and needs a response curve; the time of flight
+// part is digital and needs neither, but shares the IMU I2C bus.
+#define DIST_SENSOR_NONE        0
+#define DIST_SENSOR_ANALOG_IR   1       // GP2D120X / GP2Y0A41SK0F on PA4
+#define DIST_SENSOR_VL53L0X     2       // GY-VL53L0XV2 on I2C2
+
+#define DIST_SENSOR             DIST_SENSOR_ANALOG_IR
+
+// Reported range limits, applied by whichever driver is selected so the
+// consumer sees one convention. Values outside become DIST_INVALID, and
+// values below the minimum become DIST_TOO_CLOSE.
+#if DIST_SENSOR == DIST_SENSOR_VL53L0X
+  #define DIST_MIN_MM           30U
+  #define DIST_MAX_MM           1200U
+  #define DIST_PERIOD_MS        50U     // 33ms timing budget plus margin
+#else
+  #define DIST_MIN_MM           40U
+  #define DIST_MAX_MM           300U
+  #define DIST_PERIOD_MS        ADC_PERIOD_MS
+#endif
+
 // ---- IR distance sensor 2D120X ----
+// PA4 is NOT 5V tolerant. Every analog capable pin on this part is
+// 3.3V only, so the sensor output must reach it directly and never the
+// 5V supply that powers the sensor itself. The GP2D120X output tops out
+// near 2.6V, which is why the raw reading saturating at full scale is
+// reported as a wiring fault rather than as a very near target.
 #define DIST_ADC_PIN            4U      // PA4, ADC12_IN4
 #define DIST_ADC_CHANNEL        4U
 

@@ -210,9 +210,9 @@ def watch_distance(ser):
     print("    hand at  5 cm         about 2.0 V")
     print("    hand touching         falls again, this is the blind zone")
     print()
-    print("  A reading pinned at 0.00 V means no signal reaches PA4:")
-    print("  check the sensor has 5 V, shares a ground, and that its")
-    print("  output pin is the one wired to PA4.")
+    print("  Two readings are faults rather than distances:")
+    print("    0.00 V pinned    nothing reaches PA4")
+    print("    3.30 V pinned    PA4 is sitting on a supply rail")
     print()
 
     dec = Decoder()
@@ -227,12 +227,26 @@ def watch_distance(ser):
             for mtype, payload in dec.feed(ser.read(256)):
                 if mtype != MSG_DIAG:
                     continue
-                d = struct.unpack(DIAG_FMT, payload)
+                d = _unpack(DIAG_FMT, payload, "diagnostics")
                 counts, mv = d[10], d[11]
                 bar_n = min(40, int(mv / 60))
+
+                # The GP2D120X cannot output more than about 2.6 V, so a
+                # railed reading is a wiring fault, not a near target.
+                # Worth calling out because PA4 is not 5 V tolerant and
+                # leaving a supply on it damages the pin.
+                if counts >= 4090:
+                    note = "  SATURATED, PA4 is on a rail, POWER DOWN"
+                elif counts <= 5:
+                    note = "  no signal"
+                elif mv > 2700:
+                    note = "  above the sensor maximum, check wiring"
+                else:
+                    note = ""
+
                 sys.stdout.write(
                     f"\r  {counts:4d} counts  {mv/1000:5.3f} V  "
-                    f"|{'#' * bar_n}{'.' * (40 - bar_n)}|   ")
+                    f"|{'#' * bar_n}{'.' * (40 - bar_n)}|{note}   ")
                 sys.stdout.flush()
     except KeyboardInterrupt:
         pass
@@ -388,8 +402,20 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                 print(f"       i2c err/recover: {d[6]} / {d[7]}")
                 print(f"       battery        : {d[9]/1000:.3f} V "
                       f"({d[8]} counts)")
-                print(f"       distance ch    : {d[11]} mV "
-                      f"({d[10]} counts)")
+                # With the ToF sensor the millivolt field carries the
+                # model ID and init stage instead, since a digital
+                # sensor has no analog reading to report.
+                if d[11] >> 8 == 0xEE:
+                    stages = ["WAIT_BOOT", "READ_ID", "CHECK_ID", "SEQ_WRITE",
+                              "SEQ_WAIT", "READ_STOP", "WAIT_STOP",
+                              "START_WRITE", "START_WAIT", "READY", "FAILED"]
+                    st = d[11] & 0xFF
+                    name = stages[st] if st < len(stages) else f"?{st}"
+                    print(f"       distance (ToF) : {d[10]} mm, "
+                          f"model 0xEE, stage {name}")
+                else:
+                    print(f"       distance ch    : {d[11]} mV "
+                          f"({d[10]} counts)")
             elif mtype == MSG_TELEMETRY:
                 t = parse_telemetry(payload)
                 if csv:
@@ -515,7 +541,9 @@ def main():
         else:
             run_monitor(ser, csv=args.csv, show_imu=args.imu)
     except VersionMismatch as e:
-        print(f"\n  {e}")
+        # The watch modes hide the cursor, so restore it before printing
+        sys.stdout.write("\033[?25h\n")
+        print(f"  {e}")
     except KeyboardInterrupt:
         # Always leave the robot stopped, whatever happened
         ser.write(cmd_velocity(0, 0))

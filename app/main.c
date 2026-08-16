@@ -27,6 +27,7 @@
 #include "link.h"
 #include "bno055.h"
 #include "adc.h"
+#include "vl53l0x.h"
 #include "calib.h"
 
 // ============================================================
@@ -69,6 +70,9 @@ int main(void)
     // Init continues in the background from bno055_poll().
     bno055_init();
     adc_init();
+#if DIST_SENSOR == DIST_SENSOR_VL53L0X
+    vl53l0x_init();
+#endif
 
     drive_init(board_io_get());
 
@@ -106,6 +110,9 @@ int main(void)
         if ((now - t_adc) >= ADC_PERIOD_MS) {
             t_adc = now;
             adc_poll();
+#if DIST_SENSOR == DIST_SENSOR_VL53L0X
+            vl53l0x_poll();
+#endif
 
             // Battery state is reported, not acted on. Returning to the
             // start point and flushing buffered events both require
@@ -138,6 +145,11 @@ int main(void)
         // transfer has to be advanced far more often than the 10ms
         // slot that decides when to start one.
         bno055_pump();
+#if DIST_SENSOR == DIST_SENSOR_VL53L0X
+        // Shares the bus with the IMU. i2c.c serialises them, so each
+        // simply waits its turn rather than needing a lock here.
+        vl53l0x_pump();
+#endif
 
         // Heartbeat, a frozen LED means the loop died
         if ((now - t_led) >= 500U) {
