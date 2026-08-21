@@ -34,7 +34,15 @@ static void     stub_set_duty(int i, int16_t d) { g_duty[i] = d; }
 static void     stub_commit(void)               { }
 static void     stub_sample(void)               { }
 static float    stub_speed(int i)               { return g_speed[i]; }
-static int32_t  stub_counts(int i)              { return g_counts[i]; }
+
+// Set to simulate a cut encoder wire: the wheel still turns, but the
+// controller sees no counts from it.
+static int      g_enc_dead[2];
+
+static int32_t  stub_counts(int i)
+{
+    return g_enc_dead[i] ? 0 : g_counts[i];
+}
 static float    stub_yaw(void)                  { return 0.0f; }
 static uint32_t stub_millis(void)               { return g_now; }
 
@@ -239,6 +247,76 @@ int main(void)
               per_loop < 16000.0f);
         check("resolution is fine enough for velocity PID",
               per_loop > 5.0f);
+    }
+
+    // --------------------------------------------------------------
+    // Open loop fallback must be reversible
+    // --------------------------------------------------------------
+    {
+        drive_init(&stub_io);
+        g_enc_dead[0] = g_enc_dead[1] = 0;
+        g_speed[0] = g_speed[1] = 0.0f;
+
+        hold(0.15f, 0.0f);
+        run_loops(200);
+        check("closed loop while both encoders report",
+              !drive_is_openloop());
+
+        // Cut the left encoder. The wheel keeps turning, the counts stop.
+        g_enc_dead[0] = 1;
+        run_loops(400);
+        check("a silent encoder forces open loop",
+              drive_is_openloop());
+
+        // Reconnect it. Recovery needs sustained motion, not just presence.
+        g_enc_dead[0] = 0;
+        run_loops(40);
+        check("recovery is not instant",
+              drive_is_openloop());
+
+        run_loops(400);
+        check("closed loop resumes once counts return",
+              !drive_is_openloop());
+    }
+    {
+        // A standing robot produces no counts either. Idle time must not be
+        // mistaken for a healthy encoder.
+        drive_init(&stub_io);
+        g_enc_dead[0] = g_enc_dead[1] = 0;
+        g_speed[0] = g_speed[1] = 0.0f;
+
+        hold(0.15f, 0.0f);
+        run_loops(200);
+        g_enc_dead[1] = 1;
+        run_loops(400);
+        check("right encoder fault also forces open loop",
+              drive_is_openloop());
+
+        hold(0.0f, 0.0f);
+        run_loops(600);
+        check("standing still does not count as recovery",
+              drive_is_openloop());
+    }
+    {
+        // One good wheel is not enough; closing the loop with a dead encoder
+        // on the other side would drive the chassis in a circle.
+        drive_init(&stub_io);
+        g_enc_dead[0] = g_enc_dead[1] = 0;
+        g_speed[0] = g_speed[1] = 0.0f;
+
+        hold(0.15f, 0.0f);
+        run_loops(200);
+        g_enc_dead[0] = g_enc_dead[1] = 1;
+        run_loops(400);
+        g_enc_dead[1] = 0;
+        run_loops(600);
+        check("one healthy encoder does not resume closed loop",
+              drive_is_openloop());
+
+        g_enc_dead[0] = 0;
+        run_loops(600);
+        check("both healthy encoders resume closed loop",
+              !drive_is_openloop());
     }
 
     printf("\n%s (%d failure%s)\n\n",

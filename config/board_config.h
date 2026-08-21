@@ -82,6 +82,8 @@
 #define STALL_DUTY_THRES        700     // permille, sustained high duty
 #define STALL_TIMEOUT_MS        3000U   // then assume stuck and coast
 #define STALL_MIN_COUNTS        2       // counts expected per loop while driving
+#define ENC_FAULT_MS            1000U   // silent while commanded -> open loop
+#define ENC_RECOVER_MS          1000U   // both encoders healthy again -> closed loop
 
 // Duty is expressed in permille (-1000 .. +1000), integers only in the ISR path
 #define DUTY_MAX                1000

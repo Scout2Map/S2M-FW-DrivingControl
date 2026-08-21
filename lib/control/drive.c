@@ -239,22 +239,56 @@ static int16_t pid_step(int idx, float target_mps, float actual_mps)
 
 // A commanded wheel reporting no motion means a jam or a cut encoder
 // wire. Closing the loop on absent feedback is worse than open loop.
+//
+// The fallback is reversible. A wheel that was briefly jammed, or a
+// connector that was reseated, otherwise left the robot open loop until the
+// next MCU reset, which silently degrades odometry for the rest of a mission
+// and cannot be diagnosed from the outside.
 static void encoder_health_check(void)
 {
     static uint32_t quiet_ms[IDX_COUNT];
+    static uint32_t healthy_ms[IDX_COUNT];
+
     uint8_t commanded = (fabsf(s_v_cmd) > 0.02f) || (fabsf(s_w_cmd) > 0.05f);
+    uint8_t all_healthy = 1;
 
     for (int i = 0; i < IDX_COUNT; i++) {
         int32_t d = s_io->get_delta_counts(i);
         if (d < 0) d = -d;
 
         if (commanded && d < STALL_MIN_COUNTS) {
+            healthy_ms[i] = 0;
             quiet_ms[i] += LOOP_PERIOD_MS;
-            if (quiet_ms[i] > 1000U) {
+            if (quiet_ms[i] > ENC_FAULT_MS) {
                 s_openloop = 1;
             }
         } else {
             quiet_ms[i] = 0;
+
+            // Only motion proves an encoder works. A standing robot produces
+            // no counts either, so idle time must not count as recovery.
+            if (commanded && d >= STALL_MIN_COUNTS) {
+                if (healthy_ms[i] < ENC_RECOVER_MS) {
+                    healthy_ms[i] += LOOP_PERIOD_MS;
+                }
+            }
+        }
+
+        if (healthy_ms[i] < ENC_RECOVER_MS) {
+            all_healthy = 0;
+        }
+    }
+
+    // One good wheel is not enough: closing the loop with a dead encoder on
+    // the other side would drive the chassis in a circle.
+    if (s_openloop && all_healthy) {
+        s_openloop = 0;
+
+        // The integrators wound up against an error the open loop path never
+        // acted on. Resuming with that history would kick the wheels.
+        for (int i = 0; i < IDX_COUNT; i++) {
+            s_pid[i].integral = 0.0f;
+            s_pid[i].prev_err = 0.0f;
         }
     }
 }
