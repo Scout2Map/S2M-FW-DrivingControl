@@ -90,9 +90,11 @@ DIST_SENSOR_NAMES = {
     DIST_SENSOR_VL53L0X:   "VL53L0X ToF",
 }
 
+# Both the BNO055 and the VL53L0X default to 0x29, which is why the IMU
+# is moved down to 0x28 on this robot.
 KNOWN_I2C = {
-    0x28: "BNO055 (default)",
-    0x29: "BNO055 (ADR high)",
+    0x28: "BNO055 IMU",
+    0x29: "VL53L0X ToF (or BNO055 with ADDR high)",
     0x23: "BH1750",
     0x38: "AHT21",
     0x53: "ENS160",
@@ -208,27 +210,60 @@ def status_text(s: int) -> str:
     return "|".join(names) if names else "-"
 
 
+def query_sensor_type(ser, timeout=2.0):
+    """Reads the fitted range finder from BOOT_INFO.
+
+    The raw diagnostic channel carries ADC counts on one sensor and
+    millimetres on the other, so rendering it without knowing which is
+    fitted would put the wrong unit on whichever one is not assumed."""
+    ser.reset_input_buffer()
+    ser.write(encode(MSG_CMD_PING))
+    dec = Decoder()
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        for mtype, payload in dec.feed(ser.read(256)):
+            if mtype == MSG_BOOT_INFO:
+                return _unpack(BOOT_INFO_FMT, payload, "boot info")[6]
+    return None
+
+
 def watch_distance(ser):
     """Live raw readout of the range finder.
 
     A cooked distance cannot tell a dead sensor from an unpowered one
-    from a mismatched response curve, because all three produce a
-    plausible looking number or no number at all. The raw voltage
-    separates them immediately."""
+    from a mismatched response curve, because all three produce either a
+    plausible looking number or none at all. The raw channel separates
+    them immediately."""
+    kind = query_sensor_type(ser)
+    if kind is None:
+        print("  no boot info received. The board may not have restarted")
+        print("  since it was flashed; press reset and try again.")
+        return
+    if kind == DIST_SENSOR_NONE:
+        print("  this build has no range finder fitted (DIST_SENSOR_NONE).")
+        return
+
+    tof = (kind == DIST_SENSOR_VL53L0X)
+
     print()
-    print("  live range finder. Move a hand in front of the sensor.")
-    print("  Ctrl-C to stop.")
+    print(f"  live range finder ({DIST_SENSOR_NAMES[kind]}).")
+    print("  Move a hand in front of the sensor. Ctrl-C to stop.")
     print()
-    print("  A working GP2D120X should read roughly:")
-    print("    nothing in front      0.3 to 0.5 V")
-    print("    hand at 20 cm         about 0.6 V")
-    print("    hand at 10 cm         about 1.1 V")
-    print("    hand at  5 cm         about 2.0 V")
-    print("    hand touching         falls again, this is the blind zone")
-    print()
-    print("  Two readings are faults rather than distances:")
-    print("    0.00 V pinned    nothing reaches PA4")
-    print("    3.30 V pinned    PA4 is sitting on a supply rail")
+    if tof:
+        print("  The reading is a distance in millimetres, already")
+        print("  calibrated by the sensor. Faults look like:")
+        print("    0 mm constant     the sensor is not ranging")
+        print("    8190 or above     nothing in range")
+    else:
+        print("  A working GP2D120X should read roughly:")
+        print("    nothing in front  0.3 to 0.5 V")
+        print("    hand at 20 cm     about 0.6 V")
+        print("    hand at 10 cm     about 1.1 V")
+        print("    hand at  5 cm     about 2.0 V")
+        print()
+        print("  Two readings are faults rather than distances:")
+        print("    0.00 V pinned     nothing reaches PA4")
+        print("    3.30 V pinned     PA4 is sitting on a supply rail")
     print()
 
     dec = Decoder()
@@ -240,6 +275,7 @@ def watch_distance(ser):
             if now - last > 0.15:
                 ser.write(encode(MSG_CMD_DIAG))
                 last = now
+
             for mtype, payload in dec.feed(ser.read(256)):
                 if mtype != MSG_DIAG:
                     continue
@@ -247,33 +283,28 @@ def watch_distance(ser):
                 raw, aux = d[10], d[11]
 
                 if tof:
-                    # raw is millimetres; aux packs the model ID and the
-                    # init stage rather than a voltage
-                    stage = aux & 0xFF
-                    if raw >= 8190:
-                        note = "  out of range"
-                        bar_n = 0
-                    elif raw == 0:
-                        note = "  not ranging, check --diag"
-                        bar_n = 0
-                    else:
-                        note = ""
-                        bar_n = min(40, int(raw / 30))
+                    # raw is millimetres; aux packs the model ID above the
+                    # stage and readiness flags, not a voltage
+                    flags = aux & 0xFF
                     if (aux >> 8) != 0xEE:
-                        note = "  sensor not identified, check --diag"
-                    elif stage & VL_FAILED_BIT:
-                        note = "  init FAILED, check --diag"
-                    elif not (stage & VL_READY_BIT):
-                        note = (f"  initialising, stage "
-                                f"{stage & VL_STAGE_MASK}")
-                    sys.stdout.write(
-                        f"\r  {raw:5d} mm  "
-                        f"|{'#' * bar_n}{'.' * (40 - bar_n)}|{note}   ")
+                        note, bar_n = "  sensor not identified, see --diag", 0
+                    elif flags & VL_FAILED_BIT:
+                        note, bar_n = "  init FAILED, see --diag", 0
+                    elif not (flags & VL_READY_BIT):
+                        note = f"  initialising, stage {flags & VL_STAGE_MASK}"
+                        bar_n = 0
+                    elif raw >= 8190:
+                        note, bar_n = "  out of range", 0
+                    elif raw == 0:
+                        note, bar_n = "  not ranging", 0
+                    else:
+                        note, bar_n = "", min(40, int(raw / 30))
+                    line = f"\r  {raw:5d} mm  |{'#' * bar_n}{'.' * (40 - bar_n)}|{note}"
                 else:
-                    # The GP2D120X cannot output more than about 2.6 V,
-                    # so a railed reading is a wiring fault rather than a
-                    # near target. Worth calling out because PA4 is not
-                    # 5 V tolerant and a supply left on it damages the pin.
+                    # The GP2D120X cannot output more than about 2.6 V, so
+                    # a railed reading is a wiring fault rather than a near
+                    # target. Worth calling out because PA4 is not 5 V
+                    # tolerant and a supply left on it damages the pin.
                     bar_n = min(40, int(aux / 60))
                     if raw >= 4090:
                         note = "  SATURATED, PA4 is on a rail, POWER DOWN"
@@ -283,9 +314,10 @@ def watch_distance(ser):
                         note = "  above the sensor maximum, check wiring"
                     else:
                         note = ""
-                    sys.stdout.write(
-                        f"\r  {raw:4d} counts  {aux/1000:5.3f} V  "
-                        f"|{'#' * bar_n}{'.' * (40 - bar_n)}|{note}   ")
+                    line = (f"\r  {raw:4d} counts  {aux/1000:5.3f} V  "
+                            f"|{'#' * bar_n}{'.' * (40 - bar_n)}|{note}")
+
+                sys.stdout.write(line + "     ")
                 sys.stdout.flush()
     except KeyboardInterrupt:
         pass
@@ -412,20 +444,29 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                 found = [a for a in range(128)
                          if bits[a >> 3] & (1 << (a & 7))]
                 print(f"[i2c scan] {count} device(s) responded")
-                if lines != 0x03:
+                if found:
+                    # Devices answered, so the lines are demonstrably fine
+                    # whatever the sampled state said
+                    pass
+                elif lines != 0x03:
                     print("  BUS LINES NOT IDLE HIGH -- no scan is possible.")
                     print("  A line held low means one of:")
                     print("    - no pull up resistors on SCL/SDA")
                     print("    - the sensor board has no power")
                     print("    - SCL or SDA shorted to ground")
-                elif not found:
+                else:
                     print("  lines are healthy but nothing answered.")
                     print("  Check the sensor is powered and shares a ground.")
                 for a in found:
                     name = KNOWN_I2C.get(a, "")
                     print(f"  0x{a:02X}" + (f"  {name}" if name else ""))
                 if 0x29 in found and 0x28 not in found:
-                    print("  -> set BNO055_ADDR to 0x29 in board_config.h")
+                    print("  -> only 0x29 answered. If the ToF is fitted,")
+                    print("     tie the BNO055 ADDR pin to GND so the IMU")
+                    print("     moves to 0x28 and stops colliding.")
+                elif 0x28 in found and 0x29 not in found:
+                    print("  -> IMU is at 0x28 but nothing at 0x29;")
+                    print("     check the ToF wiring and power.")
             elif mtype == MSG_DIAG:
                 d = _unpack(DIAG_FMT, payload, "diagnostics")
                 steps = ["WAIT_BOOT", "READ_ID", "CHECK_ID", "SET_CONFIG",
