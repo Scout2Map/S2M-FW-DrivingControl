@@ -553,7 +553,13 @@ uint8_t vl53l0x_is_ok(void)
 }
 
 uint8_t  vl53l0x_model_id(void)  { return s_model_id; }
+
+// The raw state index is useful for diagnosis but must not be something
+// the host has to interpret: inserting a state would silently shift it.
+// Ready and failed are reported as their own flags instead.
 uint8_t  vl53l0x_state(void)     { return (uint8_t)s_state; }
+uint8_t  vl53l0x_is_ready(void)  { return (uint8_t)(s_state == ST_READY); }
+uint8_t  vl53l0x_is_failed(void) { return (uint8_t)(s_state == ST_FAILED); }
 uint16_t vl53l0x_raw_mm(void)    { return s_range_mm; }
 uint32_t vl53l0x_read_ok(void)   { return s_read_ok; }
 uint32_t vl53l0x_read_fail(void) { return s_read_fail; }

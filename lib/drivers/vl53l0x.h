@@ -18,7 +18,9 @@ uint8_t  vl53l0x_is_ok(void);
 // Diagnostics. model_id reads 0xEE on a healthy part; state follows the
 // init enum in vl53l0x.c.
 uint8_t  vl53l0x_model_id(void);
-uint8_t  vl53l0x_state(void);
+uint8_t  vl53l0x_state(void);      // raw index, for humans reading --diag
+uint8_t  vl53l0x_is_ready(void);
+uint8_t  vl53l0x_is_failed(void);
 uint16_t vl53l0x_raw_mm(void);
 uint32_t vl53l0x_read_ok(void);
 uint32_t vl53l0x_read_fail(void);

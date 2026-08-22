@@ -77,6 +77,8 @@ static void send_boot_info(void)
         // swap changes this and the bridge should follow automatically
         .counts_per_wheel_rev = COUNTS_PER_WHEEL_REV,
         .wheel_base_mm        = (uint16_t)WHEEL_BASE_MM,
+        .dist_sensor          = DIST_SENSOR,
+        .reserved             = 0,
     };
     send_frame(MSG_BOOT_INFO, &bi, sizeof bi);
 }
@@ -164,7 +166,12 @@ static void handle_command(uint8_t type, const uint8_t *payload, uint8_t len)
         // Reuse the two spare bytes rather than growing the frame: with
         // a digital sensor there is no millivolt reading to report, so
         // the field carries the model ID and init stage instead.
-        d.dist_mv = (uint16_t)((vl53l0x_model_id() << 8) | vl53l0x_state());
+        // High byte: model ID. Low byte: init stage, with bit 7 set once
+        // ranging is live, so the host never has to know the enum.
+        d.dist_mv = (uint16_t)((vl53l0x_model_id() << 8)
+                             | (vl53l0x_state() & 0x3FU)
+                             | (vl53l0x_is_ready()  ? 0x80U : 0U)
+                             | (vl53l0x_is_failed() ? 0x40U : 0U));
 #endif
         send_frame(MSG_DIAG, &d, sizeof d);
         break;

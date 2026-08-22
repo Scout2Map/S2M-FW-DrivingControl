@@ -173,6 +173,11 @@ typedef struct __attribute__((packed)) {
     uint8_t  fw_patch;
     uint16_t counts_per_wheel_rev;  // so the host never guesses odometry scale
     uint16_t wheel_base_mm;
+    // Which range finder this build was compiled for. The raw diagnostic
+    // channel means different things per sensor, so a host that renders
+    // it has to be told rather than left to guess from the values.
+    uint8_t  dist_sensor;           // DIST_SENSOR_* from board_config.h
+    uint8_t  reserved;
 } boot_info_t;
 
 // CRC16-CCITT, polynomial 0x1021, initial value 0xFFFF.
