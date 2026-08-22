@@ -140,10 +140,11 @@ static void handle_command(uint8_t type, const uint8_t *payload, uint8_t len)
         // the motors are stopped first.
         drive_stop();
         i2c_scan_t sc;
-        // Captured before the scan; a line stuck low explains an empty
-        // result far better than the empty result itself
-        sc.lines = i2c_lines_idle() ? 0x03U : 0x00U;
-        sc.count = i2c_scan(sc.bitmap);
+        // Sampled inside i2c_scan(), once the bus has gone quiet. Reading
+        // the pins here instead caught the IMU mid transfer and reported
+        // a healthy bus as stuck, which contradicted the devices the very
+        // same scan went on to find.
+        sc.count = i2c_scan(sc.bitmap, &sc.lines);
         send_frame(MSG_I2C_SCAN, &sc, sizeof sc);
         break;
     }

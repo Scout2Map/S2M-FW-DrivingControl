@@ -412,13 +412,24 @@ uint8_t i2c_lines_idle(void)
                      (GPIOB->IDR & (1U << IMU_I2C_SDA_PIN)));
 }
 
-uint8_t i2c_scan(uint8_t *bitmap16)
+uint8_t i2c_scan(uint8_t *bitmap16, uint8_t *lines_out)
 {
     uint8_t count = 0;
     uint8_t consecutive_timeouts = 0;
 
     for (int i = 0; i < 16; i++) {
         bitmap16[i] = 0;
+    }
+
+    // Sample the idle line state only once the peripheral has released
+    // the bus. Any other moment can catch a transfer in progress, where
+    // a low line is normal traffic rather than a fault.
+    uint32_t guard = 0;
+    while ((I2C_BUS->SR2 & I2C_SR2_BUSY) && ++guard < PROBE_GUARD) {
+        IWDG->KR = IWDG_REFRESH_KEY;
+    }
+    if (lines_out) {
+        *lines_out = i2c_lines_idle() ? 0x03U : 0x00U;
     }
 
     // 0x00 to 0x07 and 0x78 to 0x7F are reserved by the specification

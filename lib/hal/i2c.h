@@ -31,7 +31,9 @@ uint8_t      i2c_bus_recover(void);
 uint8_t      i2c_probe(uint8_t addr);
 // Both lines idle high. False means no pull up, no sensor power, or a short.
 uint8_t      i2c_lines_idle(void);
-uint8_t      i2c_scan(uint8_t *bitmap16);   // 16 bytes, one bit per address
+// bitmap16 is 16 bytes, one bit per address. lines_out receives the
+// idle state of SCL and SDA, sampled once the bus is quiet.
+uint8_t      i2c_scan(uint8_t *bitmap16, uint8_t *lines_out);
 
 uint32_t     i2c_error_count(void);
 uint32_t     i2c_recovery_count(void);
