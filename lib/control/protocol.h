@@ -178,6 +178,10 @@ typedef struct __attribute__((packed)) {
     // it has to be told rather than left to guess from the values.
     uint8_t  dist_sensor;           // DIST_SENSOR_* from board_config.h
     uint8_t  reserved;
+    // Clearance the chassis needs ahead before an in place rotation is
+    // safe. Sent so the navigation side never carries its own copy of a
+    // number that depends on the physical body.
+    uint16_t rotate_min_clearance_mm;
 } boot_info_t;
 
 // CRC16-CCITT, polynomial 0x1021, initial value 0xFFFF.

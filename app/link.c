@@ -79,6 +79,7 @@ static void send_boot_info(void)
         .wheel_base_mm        = (uint16_t)WHEEL_BASE_MM,
         .dist_sensor          = DIST_SENSOR,
         .reserved             = 0,
+        .rotate_min_clearance_mm = ROTATE_MIN_CLEARANCE_MM,
     };
     send_frame(MSG_BOOT_INFO, &bi, sizeof bi);
 }

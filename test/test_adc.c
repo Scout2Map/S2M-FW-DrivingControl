@@ -16,6 +16,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <math.h>
 #include "board_config.h"
 
 #define DIST_INVALID    0xFFFFU
@@ -163,6 +164,33 @@ int main(void)
     // --- arithmetic cannot overflow ---
     check("full scale conversion fits in 32 bits",
           (uint64_t)4095U * BATT_UV_PER_COUNT < 4294967295ULL);
+
+    // --- rotation clearance must survive the sensor recess ---
+    // The reading is not the gap in front of the robot: the sensor sits
+    // back inside the body, so the recess comes out before any geometry
+    // applies. Getting this wrong lets the chassis turn into a wall
+    // while the reading still looks comfortable.
+    {
+        double half_len = 265.0 / 2.0;
+        double corner   = sqrt(half_len * half_len + (220.0 / 2.0) * (220.0 / 2.0));
+        double overhang = corner - half_len;
+        double bare_min = overhang + DIST_SENSOR_RECESS_MM;
+        double real_gap = ROTATE_MIN_CLEARANCE_MM - DIST_SENSOR_RECESS_MM;
+
+        printf("\n   corner reaches %.0f mm past the front face\n", overhang);
+        printf("   recess %u mm, so the bare minimum reading is %.0f mm\n",
+               DIST_SENSOR_RECESS_MM, bare_min);
+        printf("   threshold %u mm leaves %.0f mm of real gap, "
+               "%.0f mm past the corner\n",
+               ROTATE_MIN_CLEARANCE_MM, real_gap, real_gap - overhang);
+
+        check("threshold exceeds the geometric minimum",
+              ROTATE_MIN_CLEARANCE_MM > bare_min);
+        check("threshold keeps real margin beyond the corner",
+              (real_gap - overhang) >= 30.0);
+        check("threshold is not so large the robot cannot turn indoors",
+              ROTATE_MIN_CLEARANCE_MM <= 300U);
+    }
 
     printf("\n%s (%d failure%s)\n\n",
            fails ? "SOME TESTS FAILED" : "ALL TESTS PASSED",

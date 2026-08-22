@@ -130,6 +130,34 @@
 #define ENC_L_INVERT            1       // verified
 #define ENC_R_INVERT            0       // verified
 
+// ---- Rotation clearance ----
+// Minimum reading from the forward range finder before an in place
+// rotation is safe.
+//
+// The sensor sits back inside the body, so its reading is not the gap
+// in front of the robot. A reading of about 60mm already means the
+// front face is against the wall, and that offset has to come out
+// before any geometry applies:
+//
+//   corner sweep radius            172mm from centre
+//   front face                     132mm from centre
+//   corner reaches past the face    40mm
+//   sensor recess offset            60mm
+//   bare minimum reading           100mm
+//
+// 100mm leaves under a millimetre of margin, which is no margin at all
+// once the beam is taken into account: it is only a few degrees wide
+// and points straight ahead, so an obstacle off to either side never
+// appears in the reading while the corner still sweeps through it.
+// 150mm keeps 50mm of real gap beyond the corner.
+//
+// The firmware does not enforce this. Whether to rotate is navigation
+// policy and belongs to the SBC, which also has the LiDAR scan and can
+// see the sides this beam cannot. The constant lives here so both ends
+// agree on one number.
+#define ROTATE_MIN_CLEARANCE_MM 150U
+#define DIST_SENSOR_RECESS_MM   60U
+
 // ---- Distance sensor selection ----
 // Two parts are supported on the same interface. The analog Sharp part
 // costs an ADC channel and needs a response curve; the time of flight

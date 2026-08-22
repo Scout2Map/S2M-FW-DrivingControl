@@ -70,7 +70,7 @@ STATUS_BITS = [
 ]
 
 TELEMETRY_FMT = "<IiihhiiihhhhhhhhHHhhHBB"
-BOOT_INFO_FMT = "<BBBBHHBB"
+BOOT_INFO_FMT = "<BBBBHHBBH"
 DIAG_FMT      = "<BBBBIIHHHHHH"
 
 # Addresses worth naming when they turn up on this robot's bus
@@ -431,6 +431,7 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                 print(f"[boot] proto v{v[0]}  fw {v[1]}.{v[2]}.{v[3]}  "
                       f"{v[4]} counts/rev  {v[5]} mm base  "
                       f"range finder: {sensor}")
+                print(f"       rotation needs {v[8]} mm clearance ahead")
                 if v[0] != PROTO_VERSION:
                     print(f"  WARNING firmware speaks protocol v{v[0]}, "
                           f"this tool speaks v{PROTO_VERSION}.")
