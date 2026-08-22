@@ -70,10 +70,26 @@ STATUS_BITS = [
 ]
 
 TELEMETRY_FMT = "<IiihhiiihhhhhhhhHHhhHBB"
-BOOT_INFO_FMT = "<BBBBHH"
+BOOT_INFO_FMT = "<BBBBHHBB"
 DIAG_FMT      = "<BBBBIIHHHHHH"
 
 # Addresses worth naming when they turn up on this robot's bus
+# Mirrors the DIST_SENSOR_* values in board_config.h
+DIST_SENSOR_NONE      = 0
+DIST_SENSOR_ANALOG_IR = 1
+DIST_SENSOR_VL53L0X   = 2
+# The firmware sets these in the low byte alongside the stage index, so
+# the host never mirrors an enum that could shift under it.
+VL_READY_BIT  = 0x80
+VL_FAILED_BIT = 0x40
+VL_STAGE_MASK = 0x3F
+
+DIST_SENSOR_NAMES = {
+    DIST_SENSOR_NONE:      "none",
+    DIST_SENSOR_ANALOG_IR: "analog IR",
+    DIST_SENSOR_VL53L0X:   "VL53L0X ToF",
+}
+
 KNOWN_I2C = {
     0x28: "BNO055 (default)",
     0x29: "BNO055 (ADR high)",
@@ -228,25 +244,48 @@ def watch_distance(ser):
                 if mtype != MSG_DIAG:
                     continue
                 d = _unpack(DIAG_FMT, payload, "diagnostics")
-                counts, mv = d[10], d[11]
-                bar_n = min(40, int(mv / 60))
+                raw, aux = d[10], d[11]
 
-                # The GP2D120X cannot output more than about 2.6 V, so a
-                # railed reading is a wiring fault, not a near target.
-                # Worth calling out because PA4 is not 5 V tolerant and
-                # leaving a supply on it damages the pin.
-                if counts >= 4090:
-                    note = "  SATURATED, PA4 is on a rail, POWER DOWN"
-                elif counts <= 5:
-                    note = "  no signal"
-                elif mv > 2700:
-                    note = "  above the sensor maximum, check wiring"
+                if tof:
+                    # raw is millimetres; aux packs the model ID and the
+                    # init stage rather than a voltage
+                    stage = aux & 0xFF
+                    if raw >= 8190:
+                        note = "  out of range"
+                        bar_n = 0
+                    elif raw == 0:
+                        note = "  not ranging, check --diag"
+                        bar_n = 0
+                    else:
+                        note = ""
+                        bar_n = min(40, int(raw / 30))
+                    if (aux >> 8) != 0xEE:
+                        note = "  sensor not identified, check --diag"
+                    elif stage & VL_FAILED_BIT:
+                        note = "  init FAILED, check --diag"
+                    elif not (stage & VL_READY_BIT):
+                        note = (f"  initialising, stage "
+                                f"{stage & VL_STAGE_MASK}")
+                    sys.stdout.write(
+                        f"\r  {raw:5d} mm  "
+                        f"|{'#' * bar_n}{'.' * (40 - bar_n)}|{note}   ")
                 else:
-                    note = ""
-
-                sys.stdout.write(
-                    f"\r  {counts:4d} counts  {mv/1000:5.3f} V  "
-                    f"|{'#' * bar_n}{'.' * (40 - bar_n)}|{note}   ")
+                    # The GP2D120X cannot output more than about 2.6 V,
+                    # so a railed reading is a wiring fault rather than a
+                    # near target. Worth calling out because PA4 is not
+                    # 5 V tolerant and a supply left on it damages the pin.
+                    bar_n = min(40, int(aux / 60))
+                    if raw >= 4090:
+                        note = "  SATURATED, PA4 is on a rail, POWER DOWN"
+                    elif raw <= 5:
+                        note = "  no signal"
+                    elif aux > 2700:
+                        note = "  above the sensor maximum, check wiring"
+                    else:
+                        note = ""
+                    sys.stdout.write(
+                        f"\r  {raw:4d} counts  {aux/1000:5.3f} V  "
+                        f"|{'#' * bar_n}{'.' * (40 - bar_n)}|{note}   ")
                 sys.stdout.flush()
     except KeyboardInterrupt:
         pass
@@ -356,8 +395,10 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
         for mtype, payload in dec.feed(data):
             if mtype == MSG_BOOT_INFO:
                 v = _unpack(BOOT_INFO_FMT, payload, "boot info")
+                sensor = DIST_SENSOR_NAMES.get(v[6], f"unknown({v[6]})")
                 print(f"[boot] proto v{v[0]}  fw {v[1]}.{v[2]}.{v[3]}  "
-                      f"{v[4]} counts/rev  {v[5]} mm base")
+                      f"{v[4]} counts/rev  {v[5]} mm base  "
+                      f"range finder: {sensor}")
                 if v[0] != PROTO_VERSION:
                     print(f"  WARNING firmware speaks protocol v{v[0]}, "
                           f"this tool speaks v{PROTO_VERSION}.")
@@ -406,13 +447,15 @@ def run_monitor(ser, sender=None, duration=None, csv=False, show_imu=False):
                 # model ID and init stage instead, since a digital
                 # sensor has no analog reading to report.
                 if d[11] >> 8 == 0xEE:
-                    stages = ["WAIT_BOOT", "READ_ID", "CHECK_ID", "SEQ_WRITE",
-                              "SEQ_WAIT", "READ_STOP", "WAIT_STOP",
-                              "START_WRITE", "START_WAIT", "READY", "FAILED"]
-                    st = d[11] & 0xFF
-                    name = stages[st] if st < len(stages) else f"?{st}"
+                    flags = d[11] & 0xFF
+                    if flags & VL_READY_BIT:
+                        st = "READY"
+                    elif flags & VL_FAILED_BIT:
+                        st = "FAILED"
+                    else:
+                        st = f"init stage {flags & VL_STAGE_MASK}"
                     print(f"       distance (ToF) : {d[10]} mm, "
-                          f"model 0xEE, stage {name}")
+                          f"model 0xEE, {st}")
                 else:
                     print(f"       distance ch    : {d[11]} mV "
                           f"({d[10]} counts)")
