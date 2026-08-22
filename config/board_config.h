@@ -82,8 +82,6 @@
 #define STALL_DUTY_THRES        700     // permille, sustained high duty
 #define STALL_TIMEOUT_MS        3000U   // then assume stuck and coast
 #define STALL_MIN_COUNTS        2       // counts expected per loop while driving
-#define ENC_FAULT_MS            1000U   // silent while commanded -> open loop
-#define ENC_RECOVER_MS          1000U   // both encoders healthy again -> closed loop
 
 // Duty is expressed in permille (-1000 .. +1000), integers only in the ISR path
 #define DUTY_MAX                1000
@@ -140,7 +138,7 @@
 #define DIST_SENSOR_ANALOG_IR   1       // GP2D120X / GP2Y0A41SK0F on PA4
 #define DIST_SENSOR_VL53L0X     2       // GY-VL53L0XV2 on I2C2
 
-#define DIST_SENSOR             DIST_SENSOR_ANALOG_IR
+#define DIST_SENSOR             DIST_SENSOR_VL53L0X
 
 // Reported range limits, applied by whichever driver is selected so the
 // consumer sees one convention. Values outside become DIST_INVALID, and
@@ -232,7 +230,7 @@
 // Confirmed by bus scan 2026-08-14: this module answers at 0x29, so its
 // ADR/COM3 pin is tied high on the breakout. The 0x28 in most example
 // code refers to boards that pull it low.
-#define BNO055_ADDR             0x29U   // verified by scan
+#define BNO055_ADDR             0x28U   // ADDR tied low, frees 0x29 for the ToF
 
 // ---- IMU axis remap ----
 // The BNO055 can rotate its own output into chassis coordinates, so

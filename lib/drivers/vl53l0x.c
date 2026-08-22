@@ -1,31 +1,38 @@
 /*
  * File   : vl53l0x.c
- * Purpose: VL53L0X time of flight range finder, as an alternative to the
+ * Purpose: VL53L0X time of flight range finder, an alternative to the
  *          analog Sharp sensor on the same distance interface.
  * Author : jihoonkimtech
  *
  * Wiring
  *   I2C2 SCL = PB10, SDA = PB11, shared with the BNO055
- *   Address 0x29, which is the part default
- *   Powered from 5V through the breakout regulator
+ *   Address 0x29, the part default
+ *   VIN from 5V through the breakout regulator, GND common
+ *   XSHUT and GPIO1 unused with a single sensor
  *
- * The BNO055 must be moved to 0x28 by pulling its ADDR pin LOW, because
- * it also defaults to 0x29. Both devices then coexist on I2C2.
+ * The BNO055 must move to 0x28 by tying its ADDR pin to GND, because it
+ * also sits at 0x29. Both devices then share I2C2 without contention.
  *
- * Why this over the analog Sharp part: the output is a digital distance
- * in millimetres, so there is no response curve to calibrate and no
- * non-monotonic blind zone to latch around. It also reaches further and
- * costs no ADC channel.
+ * Note: the initialisation is a long ordered sequence, so it is encoded
+ * as an opcode table walked one entry per pump call by the same non
+ * blocking machine the BNO055 uses. A sensor that never answers cannot
+ * stall the 200Hz control loop.
  *
- * Note: the initialisation sequence is a long list of register writes.
- * Rather than blocking through it, the table below is walked one entry
- * per pump call by the same non-blocking state machine the BNO055 uses,
- * so a sensor that never answers cannot stall the control loop.
+ * Note: several registers need read-modify-write rather than a plain
+ * store. 0x89 bit 0 selects 2.8V pad mode and the surrounding bits are
+ * device state; 0x60 disables two limit checks by setting bits. Writing
+ * a literal to either clears configuration the part depends on, which
+ * is why OP_SET_BITS and OP_CLR_BITS exist.
  *
- * Note: this driver is UNTESTED against hardware. The register sequence
- * follows the published minimal initialisation, but the part is complex
- * and ST's own API is far larger. Treat a first bring-up as debugging,
- * not as verification.
+ * Note: reference calibration is not optional. Without the VHV and
+ * phase passes the part either ranges badly or not at all, so the two
+ * calibration states below run before continuous mode starts.
+ *
+ * Note: the SPAD configuration and the reference tuning block from ST's
+ * driver are NOT applied. The part operates on its defaults, which is
+ * enough to range, but maximum range and ambient immunity will be below
+ * the datasheet figures. If range proves short, that block is the next
+ * thing to add.
  */
 
 #include <string.h>
@@ -47,66 +54,102 @@
 #define REG_RESULT_INTERRUPT_STATUS     0x13
 #define REG_RESULT_RANGE_STATUS         0x14
 #define REG_MSRC_CONFIG_CONTROL         0x60
-#define REG_FINAL_RANGE_CFG_MIN_CR_RTN  0x44
+#define REG_FINAL_RANGE_MIN_COUNT_HI    0x44
+#define REG_FINAL_RANGE_MIN_COUNT_LO    0x45
 #define REG_GPIO_HV_MUX_ACTIVE_HIGH     0x84
+#define REG_STOP_VARIABLE               0x91
 #define REG_IDENTIFICATION_MODEL_ID     0xC0
 
 #define MODEL_ID_EXPECTED       0xEE
 
-// Range result sits ten bytes past the status register
+// The range result sits ten bytes past the status register
 #define RANGE_OFFSET            10U
-
-// The sensor reports these when nothing is in range
 #define VL_OUT_OF_RANGE         8190U
 
+// ---- Init program ----
+typedef enum {
+    OP_WRITE = 0,   // store val
+    OP_SET_BITS,    // read, or in val, write back
+    OP_CLR_BITS,    // read, mask out val, write back
+    OP_READ_STOP,   // capture the stop variable
+    OP_WRITE_STOP,  // write the captured stop variable back
+    OP_END
+} op_t;
+
 typedef struct {
+    uint8_t op;
     uint8_t reg;
     uint8_t val;
-} reg_write_t;
+} init_op_t;
 
-// Minimal initialisation. Several entries are undocumented addresses
-// carried over from ST's reference driver; they are required and their
-// meaning is not published.
-static const reg_write_t s_init_seq[] = {
-    // Use 2.8V mode on the IO pads
-    { 0x89, 0x01 },
-    // Unlock the private register space and read the stop variable,
-    // which the start sequence later needs
-    { 0x88, 0x00 },
-    { 0x80, 0x01 },
-    { 0xFF, 0x01 },
-    { 0x00, 0x00 },
-    // 0x91 is read here at runtime, see INIT_READ_STOP
-    { 0x00, 0x01 },
-    { 0xFF, 0x00 },
-    { 0x80, 0x00 },
+static const init_op_t s_prog[] = {
+    // 2.8V pad mode, preserving the rest of the register
+    { OP_SET_BITS, 0x89, 0x01 },
 
-    // Disable the signal rate and range ignore limit checks
-    { REG_MSRC_CONFIG_CONTROL, 0x12 },
-    // Minimum count rate return limit, 0.25 MCPS in 9.7 fixed point
-    { REG_FINAL_RANGE_CFG_MIN_CR_RTN, 0x00 },
-    { 0x45, 0x20 },
-    { REG_SYSTEM_SEQUENCE_CONFIG, 0xFF },
+    // Unlock the private register space and capture the stop variable
+    { OP_WRITE, 0x88, 0x00 },
+    { OP_WRITE, 0x80, 0x01 },
+    { OP_WRITE, 0xFF, 0x01 },
+    { OP_WRITE, 0x00, 0x00 },
+    { OP_READ_STOP, REG_STOP_VARIABLE, 0x00 },
+    { OP_WRITE, 0x00, 0x01 },
+    { OP_WRITE, 0xFF, 0x00 },
+    { OP_WRITE, 0x80, 0x00 },
 
-    // Interrupt on new sample ready, active low
-    { REG_SYSTEM_INTERRUPT_CONFIG_GPIO, 0x04 },
-    { REG_SYSTEM_INTERRUPT_CLEAR, 0x01 },
+    // Drop the signal rate and pre range limit checks
+    { OP_SET_BITS, REG_MSRC_CONFIG_CONTROL, 0x12 },
 
-    // Enable the standard measurement sequence steps
-    { REG_SYSTEM_SEQUENCE_CONFIG, 0xE8 },
+    // Final range minimum count rate, 0.25 MCPS in 9.7 fixed point
+    { OP_WRITE, REG_FINAL_RANGE_MIN_COUNT_HI, 0x00 },
+    { OP_WRITE, REG_FINAL_RANGE_MIN_COUNT_LO, 0x20 },
+
+    { OP_WRITE, REG_SYSTEM_SEQUENCE_CONFIG, 0xFF },
+
+    // Interrupt on sample ready, active low
+    { OP_WRITE, REG_SYSTEM_INTERRUPT_CONFIG_GPIO, 0x04 },
+    { OP_CLR_BITS, REG_GPIO_HV_MUX_ACTIVE_HIGH, 0x10 },
+    { OP_WRITE, REG_SYSTEM_INTERRUPT_CLEAR, 0x01 },
+
+    { OP_WRITE, REG_SYSTEM_SEQUENCE_CONFIG, 0xE8 },
+    { OP_END, 0x00, 0x00 },
 };
-#define INIT_SEQ_LEN (sizeof s_init_seq / sizeof s_init_seq[0])
+
+// Run before continuous mode. Each entry is one calibration pass: the
+// sequence register selects which, and SYSRANGE_START launches it.
+static const init_op_t s_start_prog[] = {
+    { OP_WRITE, 0x80, 0x01 },
+    { OP_WRITE, 0xFF, 0x01 },
+    { OP_WRITE, 0x00, 0x00 },
+    { OP_WRITE_STOP, REG_STOP_VARIABLE, 0x00 },
+    { OP_WRITE, 0x00, 0x01 },
+    { OP_WRITE, 0xFF, 0x00 },
+    { OP_WRITE, 0x80, 0x00 },
+    { OP_WRITE, REG_SYSRANGE_START, 0x02 },   // continuous back to back
+    { OP_END, 0x00, 0x00 },
+};
 
 typedef enum {
     ST_WAIT_BOOT = 0,
     ST_READ_ID,
     ST_CHECK_ID,
-    ST_SEQ_WRITE,
-    ST_SEQ_WAIT,
-    ST_READ_STOP,
-    ST_WAIT_STOP,
-    ST_START_WRITE,
-    ST_START_WAIT,
+    ST_PROG_STEP,
+    ST_PROG_RD,       // read phase of a modify or a stop capture
+    ST_PROG_WR,       // write phase
+    ST_CAL_SEQ,       // select the calibration pass
+    ST_CAL_SEQ_WAIT,
+    ST_CAL_START,
+    ST_CAL_START_WAIT,
+    ST_CAL_POLL,
+    ST_CAL_POLL_WAIT,
+    ST_CAL_CLEAR,
+    ST_CAL_CLEAR_WAIT,
+    ST_CAL_STOP,
+    ST_CAL_STOP_WAIT,
+    ST_SEQ_RESTORE,
+    ST_SEQ_RESTORE_WAIT,
+    ST_START_STEP,
+    ST_START_RD,
+    ST_START_WR,
     ST_READY,
     ST_FAILED
 } vl_state_t;
@@ -123,8 +166,10 @@ typedef enum {
 
 static vl_state_t s_state;
 static vl_run_t   s_run;
-static uint8_t    s_seq_idx;
+static uint8_t    s_pc;             // program counter into the tables
+static uint8_t    s_cal_pass;       // 0 = VHV, 1 = phase
 static uint8_t    s_buf[4];
+static uint8_t    s_wr[2];
 static uint8_t    s_stop_var;
 static uint8_t    s_model_id;
 static uint16_t   s_range_mm;
@@ -133,9 +178,11 @@ static uint32_t   s_read_ok;
 static uint32_t   s_read_fail;
 static uint8_t    s_consecutive_fail;
 static uint32_t   s_wait_until;
+static uint32_t   s_cal_guard;
 
-// Written to SYSRANGE_START to begin continuous back to back ranging
-static uint8_t s_start_cmd = 0x02;
+// Calibration pass parameters: sequence config, then the start value
+static const uint8_t s_cal_seq[2]   = { 0x01, 0x02 };
+static const uint8_t s_cal_start[2] = { 0x41, 0x01 };
 
 static void wait_ms(uint32_t ms) { s_wait_until = systick_millis() + ms; }
 static uint8_t wait_done(void)
@@ -146,22 +193,106 @@ static uint8_t wait_done(void)
 void vl53l0x_init(void)
 {
     i2c_init();
-    s_state   = ST_WAIT_BOOT;
-    s_run     = RUN_IDLE;
-    s_seq_idx = 0;
+    s_state    = ST_WAIT_BOOT;
+    s_run      = RUN_IDLE;
+    s_pc       = 0;
+    s_cal_pass = 0;
     s_stop_var = 0;
     s_model_id = 0xFF;
     s_range_mm = 0;
     s_dist_mm  = DIST_INVALID;
-    s_read_ok = 0;
+    s_read_ok  = 0;
     s_read_fail = 0;
     s_consecutive_fail = 0;
+    s_cal_guard = 0;
     wait_ms(50);        // the part needs a moment after power on
+}
+
+// Walks one opcode table. Returns 1 when the table has finished.
+static uint8_t run_program(const init_op_t *prog,
+                           vl_state_t st_step,
+                           vl_state_t st_rd,
+                           vl_state_t st_wr)
+{
+    i2c_result_t r;
+    const init_op_t *op = &prog[s_pc];
+
+    if (s_state == st_step) {
+        switch (op->op) {
+        case OP_END:
+            return 1;
+
+        case OP_WRITE:
+            if (i2c_start_write(VL_ADDR, op->reg, &op->val, 1)) {
+                s_state = st_wr;
+            }
+            break;
+
+        case OP_WRITE_STOP:
+            s_wr[0] = s_stop_var;
+            if (i2c_start_write(VL_ADDR, op->reg, s_wr, 1)) {
+                s_state = st_wr;
+            }
+            break;
+
+        case OP_SET_BITS:
+        case OP_CLR_BITS:
+        case OP_READ_STOP:
+            if (i2c_start_read(VL_ADDR, op->reg, s_buf, 1)) {
+                s_state = st_rd;
+            }
+            break;
+
+        default:
+            s_pc++;
+            break;
+        }
+        return 0;
+    }
+
+    if (s_state == st_rd) {
+        r = i2c_poll();
+        if (r == I2C_RESULT_DONE) {
+            if (op->op == OP_READ_STOP) {
+                s_stop_var = s_buf[0];
+                s_pc++;
+                s_state = st_step;
+            } else {
+                s_wr[0] = (op->op == OP_SET_BITS)
+                        ? (uint8_t)(s_buf[0] | op->val)
+                        : (uint8_t)(s_buf[0] & (uint8_t)~op->val);
+                if (i2c_start_write(VL_ADDR, op->reg, s_wr, 1)) {
+                    s_state = st_wr;
+                }
+            }
+        } else if (r == I2C_RESULT_ERROR) {
+            s_read_fail++;
+            s_state = st_step;      // retry the same opcode
+        }
+        return 0;
+    }
+
+    if (s_state == st_wr) {
+        r = i2c_poll();
+        if (r == I2C_RESULT_DONE) {
+            s_pc++;
+            s_state = st_step;
+        } else if (r == I2C_RESULT_ERROR) {
+            s_read_fail++;
+            s_state = st_step;
+        }
+        return 0;
+    }
+
+    return 0;
 }
 
 static void init_pump(void)
 {
     i2c_result_t r;
+    static const uint8_t seq_final = 0xE8;
+    static const uint8_t zero = 0x00;
+    static const uint8_t clear = 0x01;
 
     switch (s_state) {
     case ST_WAIT_BOOT:
@@ -179,11 +310,11 @@ static void init_pump(void)
         if (r == I2C_RESULT_DONE) {
             s_model_id = s_buf[0];
             if (s_buf[0] == MODEL_ID_EXPECTED) {
-                s_seq_idx = 0;
-                s_state = ST_SEQ_WRITE;
+                s_pc = 0;
+                s_state = ST_PROG_STEP;
             } else {
-                // Wrong ID means the wrong device or the wrong address.
-                // Retrying will not change that, so stop and report.
+                // Wrong ID means the wrong device or a clashing address,
+                // neither of which retrying can fix
                 s_state = ST_FAILED;
             }
         } else if (r == I2C_RESULT_ERROR) {
@@ -192,64 +323,121 @@ static void init_pump(void)
         }
         break;
 
-    case ST_SEQ_WRITE:
-        if (s_seq_idx >= INIT_SEQ_LEN) {
-            s_state = ST_START_WRITE;
-            break;
-        }
-        // The stop variable has to be read partway through the sequence
-        if (s_seq_idx == 5U) {
-            s_state = ST_READ_STOP;
-            break;
-        }
-        if (i2c_start_write(VL_ADDR, s_init_seq[s_seq_idx].reg,
-                            &s_init_seq[s_seq_idx].val, 1)) {
-            s_state = ST_SEQ_WAIT;
+    case ST_PROG_STEP:
+    case ST_PROG_RD:
+    case ST_PROG_WR:
+        if (run_program(s_prog, ST_PROG_STEP, ST_PROG_RD, ST_PROG_WR)) {
+            s_cal_pass = 0;
+            s_state = ST_CAL_SEQ;
         }
         break;
 
-    case ST_SEQ_WAIT:
+    // ---- Reference calibration, two passes ----
+    case ST_CAL_SEQ:
+        if (i2c_start_write(VL_ADDR, REG_SYSTEM_SEQUENCE_CONFIG,
+                            &s_cal_seq[s_cal_pass], 1)) {
+            s_state = ST_CAL_SEQ_WAIT;
+        }
+        break;
+
+    case ST_CAL_SEQ_WAIT:
+        r = i2c_poll();
+        if (r == I2C_RESULT_DONE)      s_state = ST_CAL_START;
+        else if (r == I2C_RESULT_ERROR) s_state = ST_CAL_SEQ;
+        break;
+
+    case ST_CAL_START:
+        if (i2c_start_write(VL_ADDR, REG_SYSRANGE_START,
+                            &s_cal_start[s_cal_pass], 1)) {
+            s_cal_guard = systick_millis();
+            s_state = ST_CAL_START_WAIT;
+        }
+        break;
+
+    case ST_CAL_START_WAIT:
+        r = i2c_poll();
+        if (r == I2C_RESULT_DONE)      s_state = ST_CAL_POLL;
+        else if (r == I2C_RESULT_ERROR) s_state = ST_CAL_START;
+        break;
+
+    case ST_CAL_POLL:
+        if (i2c_start_read(VL_ADDR, REG_RESULT_INTERRUPT_STATUS, s_buf, 1)) {
+            s_state = ST_CAL_POLL_WAIT;
+        }
+        break;
+
+    case ST_CAL_POLL_WAIT:
         r = i2c_poll();
         if (r == I2C_RESULT_DONE) {
-            s_seq_idx++;
-            s_state = ST_SEQ_WRITE;
+            if (s_buf[0] & 0x07U) {
+                s_state = ST_CAL_CLEAR;
+            } else if ((systick_millis() - s_cal_guard) > 500U) {
+                // Calibration should finish in a few milliseconds. A
+                // part that never raises the flag is not going to.
+                s_state = ST_FAILED;
+            } else {
+                s_state = ST_CAL_POLL;
+            }
         } else if (r == I2C_RESULT_ERROR) {
-            s_read_fail++;
-            s_state = ST_SEQ_WRITE;     // retry the same entry
+            s_state = ST_CAL_POLL;
         }
         break;
 
-    case ST_READ_STOP:
-        if (i2c_start_read(VL_ADDR, 0x91, s_buf, 1)) {
-            s_state = ST_WAIT_STOP;
+    case ST_CAL_CLEAR:
+        if (i2c_start_write(VL_ADDR, REG_SYSTEM_INTERRUPT_CLEAR, &clear, 1)) {
+            s_state = ST_CAL_CLEAR_WAIT;
         }
         break;
 
-    case ST_WAIT_STOP:
+    case ST_CAL_CLEAR_WAIT:
+        r = i2c_poll();
+        if (r == I2C_RESULT_DONE)      s_state = ST_CAL_STOP;
+        else if (r == I2C_RESULT_ERROR) s_state = ST_CAL_CLEAR;
+        break;
+
+    case ST_CAL_STOP:
+        if (i2c_start_write(VL_ADDR, REG_SYSRANGE_START, &zero, 1)) {
+            s_state = ST_CAL_STOP_WAIT;
+        }
+        break;
+
+    case ST_CAL_STOP_WAIT:
         r = i2c_poll();
         if (r == I2C_RESULT_DONE) {
-            s_stop_var = s_buf[0];
-            s_seq_idx++;
-            s_state = ST_SEQ_WRITE;
+            if (++s_cal_pass < 2U) {
+                s_state = ST_CAL_SEQ;       // second pass
+            } else {
+                s_state = ST_SEQ_RESTORE;
+            }
         } else if (r == I2C_RESULT_ERROR) {
-            s_state = ST_READ_STOP;
+            s_state = ST_CAL_STOP;
         }
         break;
 
-    case ST_START_WRITE:
-        // Continuous back to back ranging. The default timing budget is
-        // about 33ms, which sits comfortably inside DIST_PERIOD_MS.
-        if (i2c_start_write(VL_ADDR, REG_SYSRANGE_START, &s_start_cmd, 1)) {
-            s_state = ST_START_WAIT;
+    case ST_SEQ_RESTORE:
+        // Put the full measurement sequence back after calibration
+        if (i2c_start_write(VL_ADDR, REG_SYSTEM_SEQUENCE_CONFIG,
+                            &seq_final, 1)) {
+            s_state = ST_SEQ_RESTORE_WAIT;
         }
         break;
 
-    case ST_START_WAIT:
+    case ST_SEQ_RESTORE_WAIT:
         r = i2c_poll();
         if (r == I2C_RESULT_DONE) {
+            s_pc = 0;
+            s_state = ST_START_STEP;
+        } else if (r == I2C_RESULT_ERROR) {
+            s_state = ST_SEQ_RESTORE;
+        }
+        break;
+
+    case ST_START_STEP:
+    case ST_START_RD:
+    case ST_START_WR:
+        if (run_program(s_start_prog, ST_START_STEP,
+                        ST_START_RD, ST_START_WR)) {
             s_state = ST_READY;
-        } else if (r == I2C_RESULT_ERROR) {
-            s_state = ST_START_WRITE;
         }
         break;
 
@@ -261,6 +449,7 @@ static void init_pump(void)
 static void run_pump(void)
 {
     i2c_result_t r;
+    static const uint8_t clear = 0x01;
 
     switch (s_run) {
     case RUN_IDLE:
@@ -275,7 +464,7 @@ static void run_pump(void)
     case RUN_WAIT_STATUS:
         r = i2c_poll();
         if (r == I2C_RESULT_DONE) {
-            // Bits 2:0 hold the interrupt reason; zero means not ready
+            // Bits 2:0 hold the interrupt reason, zero means not ready
             s_run = (s_buf[0] & 0x07U) ? RUN_READ_RANGE : RUN_IDLE;
         } else if (r == I2C_RESULT_ERROR) {
             s_read_fail++;
@@ -294,18 +483,15 @@ static void run_pump(void)
     case RUN_WAIT_RANGE:
         r = i2c_poll();
         if (r == I2C_RESULT_DONE) {
-            // Big endian, unlike most of this device
+            // Big endian here, unlike most of this device
             s_range_mm = (uint16_t)((s_buf[0] << 8) | s_buf[1]);
 
-            if (s_range_mm >= VL_OUT_OF_RANGE) {
+            if (s_range_mm >= VL_OUT_OF_RANGE || s_range_mm > DIST_MAX_MM) {
                 s_dist_mm = DIST_INVALID;
             } else if (s_range_mm < DIST_MIN_MM) {
-                // Below the specified minimum the reading is unreliable
-                // rather than merely close, so report it as such instead
-                // of passing a number the caller would trust
+                // Below the specified minimum the number is unreliable
+                // rather than merely small, so it is reported as such
                 s_dist_mm = DIST_TOO_CLOSE;
-            } else if (s_range_mm > DIST_MAX_MM) {
-                s_dist_mm = DIST_INVALID;
             } else {
                 s_dist_mm = s_range_mm;
             }
@@ -320,13 +506,11 @@ static void run_pump(void)
         }
         break;
 
-    case RUN_CLEAR_INT: {
-        static const uint8_t clear = 0x01;
+    case RUN_CLEAR_INT:
         if (i2c_start_write(VL_ADDR, REG_SYSTEM_INTERRUPT_CLEAR, &clear, 1)) {
             s_run = RUN_WAIT_CLEAR;
         }
         break;
-    }
 
     case RUN_WAIT_CLEAR:
         r = i2c_poll();
@@ -347,7 +531,6 @@ static void run_pump(void)
     }
 }
 
-// Advances whatever transfer is in flight. Call every main loop pass.
 void vl53l0x_pump(void)
 {
     if (s_state != ST_READY) {
@@ -357,7 +540,6 @@ void vl53l0x_pump(void)
     run_pump();
 }
 
-// Starts a fresh read cycle. Call at DIST_PERIOD_MS.
 void vl53l0x_poll(void)
 {
     if (s_state == ST_READY && s_run == RUN_IDLE) {
@@ -365,7 +547,7 @@ void vl53l0x_poll(void)
     }
 }
 
-uint8_t  vl53l0x_is_ok(void)
+uint8_t vl53l0x_is_ok(void)
 {
     return (uint8_t)(s_state == ST_READY && s_consecutive_fail < 5U);
 }
@@ -379,7 +561,7 @@ uint32_t vl53l0x_read_fail(void) { return s_read_fail; }
 // Shared distance interface. Only one distance driver defines these.
 uint16_t dist_get_mm(void)       { return s_dist_mm; }
 uint8_t  dist_is_too_close(void) { return (uint8_t)(s_dist_mm == DIST_TOO_CLOSE); }
-uint16_t dist_get_counts(void)   { return s_range_mm; }   // raw, for --dist
+uint16_t dist_get_counts(void)   { return s_range_mm; }   // raw mm
 uint16_t dist_get_mv(void)       { return 0; }            // not analog
 
 #endif // DIST_SENSOR == DIST_SENSOR_VL53L0X
